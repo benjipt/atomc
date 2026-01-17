@@ -168,6 +168,92 @@ fn run_atomc_expect_failure_sync(
     String::from_utf8_lossy(&output.stderr).trim().to_string()
 }
 
+#[tokio::test]
+async fn log_diff_enabled_emits_preview() {
+    let diff = load_fixture("diffs/simple_feature.diff");
+    let expected_json = load_fixture("plans/simple_feature.plan.json");
+    let mock = start_mock_ollama(expected_json).await;
+    let cwd = TempDir::new().expect("temp dir");
+
+    let stderr = run_atomc_stderr(
+        &["--log-level", "debug", "plan", "--format", "json", "--log-diff"],
+        cwd.path(),
+        &mock.base_url,
+        Some(&diff),
+    )
+    .await;
+
+    assert!(stderr.contains("diff logging enabled"));
+}
+
+#[tokio::test]
+async fn log_diff_disabled_does_not_emit_preview() {
+    let diff = load_fixture("diffs/simple_feature.diff");
+    let expected_json = load_fixture("plans/simple_feature.plan.json");
+    let mock = start_mock_ollama(expected_json).await;
+    let cwd = TempDir::new().expect("temp dir");
+
+    let stderr = run_atomc_stderr(
+        &["--log-level", "debug", "plan", "--format", "json"],
+        cwd.path(),
+        &mock.base_url,
+        Some(&diff),
+    )
+    .await;
+
+    assert!(!stderr.contains("diff logging enabled"));
+}
+
+async fn run_atomc_stderr(
+    args: &[&str],
+    dir: &Path,
+    ollama_url: &str,
+    input: Option<&str>,
+) -> String {
+    let args = args.iter().map(|value| value.to_string()).collect::<Vec<_>>();
+    let dir = dir.to_path_buf();
+    let ollama_url = ollama_url.to_string();
+    let input = input.map(|value| value.to_string());
+
+    tokio::task::spawn_blocking(move || run_atomc_stderr_sync(args, dir, ollama_url, input))
+        .await
+        .expect("spawn blocking")
+}
+
+fn run_atomc_stderr_sync(
+    args: Vec<String>,
+    dir: std::path::PathBuf,
+    ollama_url: String,
+    input: Option<String>,
+) -> String {
+    let mut cmd = std::process::Command::new(atomc_bin());
+    cmd.args(args)
+        .current_dir(dir)
+        .env("LOCAL_COMMIT_RUNTIME", "ollama")
+        .env("LOCAL_COMMIT_OLLAMA_URL", ollama_url)
+        .env("LOCAL_COMMIT_LLM_TIMEOUT_SECS", "5")
+        .env_remove("LOCAL_COMMIT_AGENT_CONFIG")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if input.is_some() {
+        cmd.stdin(Stdio::piped());
+    }
+    let mut child = cmd.spawn().expect("spawn atomc");
+    if let Some(payload) = input {
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin
+            .write_all(payload.as_bytes())
+            .expect("write stdin");
+    }
+    let output = child.wait_with_output().expect("atomc output");
+    assert!(
+        output.status.success(),
+        "atomc failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stderr).trim().to_string()
+}
+
 fn fixtures_root() -> std::path::PathBuf {
     workspace_root().join("tests/fixtures")
 }
