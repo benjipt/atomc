@@ -1,6 +1,5 @@
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::Validator;
 use serde_json::Value;
-use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy)]
 pub enum SchemaKind {
@@ -21,31 +20,28 @@ pub enum SchemaValidationError {
 
 pub fn validate_schema(kind: SchemaKind, instance: &Value) -> Result<(), SchemaValidationError> {
     let schema = schema_for(kind)?;
-    schema
-        .validate(instance)
-        .map_err(|errors| SchemaValidationError::SchemaViolation(errors.map(|e| e.to_string()).collect()))?;
-    Ok(())
-}
-
-fn schema_for(kind: SchemaKind) -> Result<&'static JSONSchema, SchemaValidationError> {
-    match kind {
-        SchemaKind::CommitPlan => COMMIT_PLAN_SCHEMA.get_or_try_init(|| compile_schema(COMMIT_PLAN_SCHEMA_STR)),
-        SchemaKind::CommitApply => COMMIT_APPLY_SCHEMA.get_or_try_init(|| compile_schema(COMMIT_APPLY_SCHEMA_STR)),
-        SchemaKind::ErrorResponse => ERROR_SCHEMA.get_or_try_init(|| compile_schema(ERROR_SCHEMA_STR)),
+    let errors: Vec<String> = schema.iter_errors(instance).map(|e| e.to_string()).collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(SchemaValidationError::SchemaViolation(errors))
     }
 }
 
-fn compile_schema(schema_str: &str) -> Result<JSONSchema, SchemaValidationError> {
-    let schema_value: Value = serde_json::from_str(schema_str)?;
-    JSONSchema::options()
-        .with_draft(Draft::Draft202012)
-        .compile(&schema_value)
-        .map_err(|err| SchemaValidationError::SchemaCompile(err.to_string()))
+fn schema_for(kind: SchemaKind) -> Result<Validator, SchemaValidationError> {
+    match kind {
+        SchemaKind::CommitPlan => compile_schema(COMMIT_PLAN_SCHEMA_STR),
+        SchemaKind::CommitApply => compile_schema(COMMIT_APPLY_SCHEMA_STR),
+        SchemaKind::ErrorResponse => compile_schema(ERROR_SCHEMA_STR),
+    }
 }
 
-static COMMIT_PLAN_SCHEMA: OnceLock<JSONSchema> = OnceLock::new();
-static COMMIT_APPLY_SCHEMA: OnceLock<JSONSchema> = OnceLock::new();
-static ERROR_SCHEMA: OnceLock<JSONSchema> = OnceLock::new();
+fn compile_schema(schema_str: &str) -> Result<Validator, SchemaValidationError> {
+    let schema_value: Value = serde_json::from_str(schema_str)?;
+    jsonschema::draft202012::options()
+        .build(&schema_value)
+        .map_err(|err| SchemaValidationError::SchemaCompile(err.to_string()))
+}
 
 const COMMIT_PLAN_SCHEMA_STR: &str =
     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../schemas/v1/commit-plan.json"));
