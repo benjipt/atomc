@@ -1,5 +1,6 @@
 pub mod config;
 pub mod git;
+pub mod llm;
 pub mod schema;
 pub mod semantic;
 pub mod types;

@@ -17,3 +17,6 @@ tracing.workspace = true
 toml.workspace = true
 directories.workspace = true
 once_cell.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
