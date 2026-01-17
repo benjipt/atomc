@@ -1274,6 +1274,8 @@ fn log_diff_preview(request_id: &str, diff: &str, log_diff: bool) {
     let truncated = bytes.len() > max_bytes;
     let slice = if truncated { &bytes[..max_bytes] } else { bytes };
     let preview = String::from_utf8_lossy(slice);
+    #[cfg(test)]
+    crate::tests::record_log_diff_preview(&preview);
     debug!(
         request_id = %request_id,
         diff_bytes = bytes.len(),
@@ -1475,6 +1477,7 @@ mod tests {
     }
 
     static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    static LOG_DIFF_PREVIEW: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
     fn lock_test_state() -> std::sync::MutexGuard<'static, ()> {
         TEST_LOCK
@@ -1489,6 +1492,22 @@ mod tests {
 
     fn lock_server() -> std::sync::MutexGuard<'static, ()> {
         lock_test_state()
+    }
+
+    pub(super) fn record_log_diff_preview(preview: &str) {
+        let mut guard = LOG_DIFF_PREVIEW
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap();
+        *guard = Some(preview.to_string());
+    }
+
+    fn take_log_diff_preview() -> Option<String> {
+        LOG_DIFF_PREVIEW
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap()
+            .take()
     }
 
     fn set_apply_failure(value: bool) {
@@ -1708,11 +1727,13 @@ mod tests {
     async fn plan_endpoint_returns_plan_with_metadata() {
         let _lock = lock_server();
         set_llm_mode(0);
+        let _ = take_log_diff_preview();
         let app = super::build_app(ServerState {
             config: ResolvedConfig::defaults(),
         });
         let payload = serde_json::json!({
-            "diff": "diff --git a/file.txt b/file.txt\n"
+            "diff": "diff --git a/file.txt b/file.txt\n",
+            "log_diff": true
         });
         let request = Request::builder()
             .method("POST")
@@ -1727,17 +1748,21 @@ mod tests {
         assert_eq!(json["input"]["source"], "diff");
         assert!(json["input"]["diff_hash"].as_str().unwrap().starts_with("sha256:"));
         assert_eq!(json["plan"].as_array().unwrap().len(), 1);
+        let preview = take_log_diff_preview();
+        assert!(preview.as_deref().unwrap_or("").contains("diff --git"));
     }
 
     #[tokio::test]
     async fn plan_endpoint_propagates_request_id() {
         let _lock = lock_server();
         set_llm_mode(0);
+        let _ = take_log_diff_preview();
         let app = super::build_app(ServerState {
             config: ResolvedConfig::defaults(),
         });
         let payload = serde_json::json!({
-            "diff": "diff --git a/file.txt b/file.txt\n"
+            "diff": "diff --git a/file.txt b/file.txt\n",
+            "log_diff": false
         });
         let request = Request::builder()
             .method("POST")
@@ -1751,6 +1776,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers.get("x-request-id").unwrap(), "req-123");
         assert_eq!(json["request_id"], "req-123");
+        assert!(take_log_diff_preview().is_none());
     }
 
     #[tokio::test]
