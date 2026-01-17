@@ -1,6 +1,7 @@
 mod cli;
 
 use atomc_core::config::{self, ConfigError, PartialConfig, ResolvedConfig};
+use atomc_core::git::{self, GitError};
 use atomc_core::types::{ErrorDetail, ErrorResponse};
 use atomc_core::SCHEMA_VERSION;
 use clap::Parser;
@@ -42,7 +43,12 @@ fn handle_plan(cli: &Cli, args: &PlanArgs) -> Result<(), ExitCode> {
         validate_repo_path(repo, args.format)?;
     }
 
-    let diff = resolve_diff_input(args.diff_file.clone(), args.format)?;
+    let mut diff = resolve_diff_input(args.diff_file.clone(), args.format)?;
+    if diff.is_none() {
+        if let Some(repo) = args.repo.as_deref() {
+            diff = Some(compute_repo_diff(repo, &config, args.format)?);
+        }
+    }
     validate_diff_requirements(&diff, args.repo.as_deref(), &config, args.format)?;
 
     Err(emit_error(
@@ -63,7 +69,10 @@ fn handle_apply(cli: &Cli, args: &ApplyArgs) -> Result<(), ExitCode> {
     let config = resolve_config(cli, overrides, args.format)?;
     validate_repo_path(&args.repo, args.format)?;
 
-    let diff = resolve_diff_input(args.diff_file.clone(), args.format)?;
+    let mut diff = resolve_diff_input(args.diff_file.clone(), args.format)?;
+    if diff.is_none() {
+        diff = Some(compute_repo_diff(args.repo.as_path(), &config, args.format)?);
+    }
     validate_diff_requirements(&diff, Some(args.repo.as_path()), &config, args.format)?;
 
     Err(emit_error(
@@ -235,6 +244,7 @@ enum ErrorCode {
     UsageError,
     InputInvalid,
     ConfigError,
+    GitError,
 }
 
 impl ErrorCode {
@@ -243,6 +253,7 @@ impl ErrorCode {
             ErrorCode::UsageError => "usage_error",
             ErrorCode::InputInvalid => "input_invalid",
             ErrorCode::ConfigError => "config_error",
+            ErrorCode::GitError => "git_error",
         }
     }
 
@@ -251,6 +262,7 @@ impl ErrorCode {
             ErrorCode::UsageError => ExitCode::from(2),
             ErrorCode::InputInvalid => ExitCode::from(3),
             ErrorCode::ConfigError => ExitCode::from(7),
+            ErrorCode::GitError => ExitCode::from(6),
         }
     }
 }
@@ -286,6 +298,29 @@ fn emit_error(format: OutputFormat, code: ErrorCode, message: &str, details: Opt
 
 fn request_id() -> String {
     Ulid::new().to_string()
+}
+
+fn compute_repo_diff(repo: &Path, config: &ResolvedConfig, format: OutputFormat) -> Result<String, ExitCode> {
+    git::compute_diff(repo, config.diff_mode, config.include_untracked).map_err(|err| {
+        emit_error(
+            format,
+            ErrorCode::GitError,
+            "failed to compute git diff",
+            Some(git_error_details(err)),
+        )
+    })
+}
+
+fn git_error_details(error: GitError) -> Value {
+    match error {
+        GitError::CommandFailed { cmd, stderr } => {
+            serde_json::json!({ "cmd": cmd, "stderr": stderr })
+        }
+        GitError::CommandIo { cmd, source } => {
+            serde_json::json!({ "cmd": cmd, "error": source.to_string() })
+        }
+        GitError::OutputNotUtf8 => serde_json::json!({ "error": "git output was not utf-8" }),
+    }
 }
 
 #[cfg(test)]
