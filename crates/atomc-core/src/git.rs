@@ -66,11 +66,7 @@ fn run_git_with_extra_paths(
 ) -> Result<String, GitError> {
     let mut cmd = Command::new("git");
     cmd.current_dir(repo).args(args);
-    if !extra_paths.is_empty() {
-        for path in extra_paths {
-            cmd.arg(path);
-        }
-    }
+    cmd.args(extra_paths);
     let cmd_string = format!(
         "git {}{}",
         args.join(" "),
@@ -93,8 +89,9 @@ fn run_git_with_extra_paths(
         source,
     })?;
 
-    let status_ok = output.status.success()
-        || (allow_exit_1 && matches!(output.status.code(), Some(1)));
+    // `git diff` exits 1 when changes are present; allow that for diff commands.
+    let status_ok =
+        output.status.success() || (allow_exit_1 && matches!(output.status.code(), Some(1)));
     if !status_ok {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         return Err(GitError::CommandFailed {

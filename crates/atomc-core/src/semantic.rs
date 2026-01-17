@@ -66,16 +66,17 @@ fn validate_commit_unit(
     errors: &mut SemanticValidationErrors,
     warnings: &mut SemanticValidationWarnings,
 ) {
+    let id = unit.id.clone();
     if unit.id.trim().is_empty() {
         errors.push(SemanticValidationError::EmptyId {
-            id: unit.id.clone(),
+            id: id.clone(),
         });
     }
 
     let summary_len = unit.summary.chars().count();
     if summary_len < 50 || summary_len > 72 {
         errors.push(SemanticValidationError::SummaryLength {
-            id: unit.id.clone(),
+            id: id.clone(),
             len: summary_len,
         });
     }
@@ -83,7 +84,7 @@ fn validate_commit_unit(
     let body_len = unit.body.len();
     if body_len < 1 || body_len > 3 {
         errors.push(SemanticValidationError::BodyLineCount {
-            id: unit.id.clone(),
+            id: id.clone(),
             count: body_len,
         });
     }
@@ -91,7 +92,7 @@ fn validate_commit_unit(
     for (idx, line) in unit.body.iter().enumerate() {
         if line.trim().is_empty() {
             errors.push(SemanticValidationError::BodyLineEmpty {
-                id: unit.id.clone(),
+                id: id.clone(),
                 index: idx,
             });
         }
@@ -100,20 +101,20 @@ fn validate_commit_unit(
     match unit.scope.as_deref() {
         Some(scope) if scope.trim().is_empty() => {
             errors.push(SemanticValidationError::ScopeEmpty {
-                id: unit.id.clone(),
+                id: id.clone(),
             });
         }
         Some(scope) if !is_kebab_case(scope) => {
             errors.push(SemanticValidationError::ScopeInvalid {
-                id: unit.id.clone(),
+                id: id.clone(),
             });
         }
         None => match scope_policy {
             ScopePolicy::Require => errors.push(SemanticValidationError::ScopeMissing {
-                id: unit.id.clone(),
+                id: id.clone(),
             }),
             ScopePolicy::Warn => warnings.push(SemanticWarning::ScopeMissing {
-                id: unit.id.clone(),
+                id: id.clone(),
             }),
             ScopePolicy::Allow => {}
         },
