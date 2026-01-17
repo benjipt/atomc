@@ -94,4 +94,14 @@ fn resolved_defaults_match_expected_values() {
     let defaults = ResolvedConfig::defaults();
     assert_eq!(defaults.ollama_url, "http://localhost:11434");
     assert_eq!(defaults.llm_timeout_secs, 60);
+    assert!(!defaults.log_diff);
+}
+
+#[test]
+fn resolve_config_reads_log_diff_env() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let _env_log = EnvVarGuard::set("LOCAL_COMMIT_LOG_DIFF", "true");
+
+    let resolved = resolve_config(None, PartialConfig::default()).unwrap();
+    assert!(resolved.log_diff);
 }

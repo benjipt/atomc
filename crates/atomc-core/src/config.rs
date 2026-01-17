@@ -30,6 +30,7 @@ pub struct PartialConfig {
     pub max_diff_bytes: Option<u64>,
     pub diff_mode: Option<DiffMode>,
     pub include_untracked: Option<bool>,
+    pub log_diff: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +44,7 @@ pub struct ResolvedConfig {
     pub max_diff_bytes: u64,
     pub diff_mode: DiffMode,
     pub include_untracked: bool,
+    pub log_diff: bool,
 }
 
 impl ResolvedConfig {
@@ -57,6 +59,7 @@ impl ResolvedConfig {
             max_diff_bytes: 2_000_000,
             diff_mode: DiffMode::All,
             include_untracked: true,
+            log_diff: false,
         }
     }
 }
@@ -150,6 +153,9 @@ fn load_env_config() -> Result<PartialConfig, ConfigError> {
     }
     if let Some(value) = env("LOCAL_COMMIT_INCLUDE_UNTRACKED") {
         config.include_untracked = Some(parse_bool("LOCAL_COMMIT_INCLUDE_UNTRACKED", &value)?);
+    }
+    if let Some(value) = env("LOCAL_COMMIT_LOG_DIFF") {
+        config.log_diff = Some(parse_bool("LOCAL_COMMIT_LOG_DIFF", &value)?);
     }
 
     Ok(config)
@@ -263,6 +269,9 @@ impl PartialConfig {
         }
         if let Some(value) = self.include_untracked {
             resolved.include_untracked = value;
+        }
+        if let Some(value) = self.log_diff {
+            resolved.log_diff = value;
         }
     }
 }
