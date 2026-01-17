@@ -1,3 +1,4 @@
+/// Semantic validation for commit plans beyond JSON schema checks.
 use crate::types::CommitUnit;
 
 pub type SemanticValidationErrors = Vec<SemanticValidationError>;
@@ -21,6 +22,7 @@ pub enum SemanticValidationError {
     ScopeInvalid { id: String },
 }
 
+/// How to treat missing commit scopes.
 #[derive(Debug, Clone, Copy)]
 pub enum ScopePolicy {
     Require,
@@ -28,16 +30,19 @@ pub enum ScopePolicy {
     Warn,
 }
 
+/// Non-fatal validation warnings emitted during semantic checks.
 #[derive(Debug, Clone)]
 pub enum SemanticWarning {
     ScopeMissing { id: String },
 }
 
+/// Summary of semantic validation warnings.
 #[derive(Debug, Clone, Default)]
 pub struct SemanticValidationReport {
     pub warnings: SemanticValidationWarnings,
 }
 
+/// Validate commit units and return any non-fatal warnings.
 pub fn validate_commit_units(
     units: &[CommitUnit],
     scope_policy: ScopePolicy,

@@ -1,3 +1,4 @@
+/// Schema-aligned types used by CLI and server JSON responses.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
