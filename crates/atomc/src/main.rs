@@ -43,7 +43,7 @@ fn handle_plan(cli: &Cli, args: &PlanArgs) -> Result<(), ExitCode> {
         validate_repo_path(repo, args.format)?;
     }
 
-    let mut diff = resolve_diff_input(args.diff_file.clone(), args.format)?;
+    let mut diff = resolve_diff_input(args.diff_file.clone(), config.max_diff_bytes, args.format)?;
     if diff.is_none() {
         if let Some(repo) = args.repo.as_deref() {
             diff = Some(compute_repo_diff(repo, &config, args.format)?);
@@ -69,7 +69,7 @@ fn handle_apply(cli: &Cli, args: &ApplyArgs) -> Result<(), ExitCode> {
     let config = resolve_config(cli, overrides, args.format)?;
     validate_repo_path(&args.repo, args.format)?;
 
-    let mut diff = resolve_diff_input(args.diff_file.clone(), args.format)?;
+    let mut diff = resolve_diff_input(args.diff_file.clone(), config.max_diff_bytes, args.format)?;
     if diff.is_none() {
         diff = Some(compute_repo_diff(args.repo.as_path(), &config, args.format)?);
     }
@@ -185,13 +185,17 @@ fn validate_diff_requirements(
     Ok(())
 }
 
-fn resolve_diff_input(diff_file: Option<std::path::PathBuf>, format: OutputFormat) -> Result<Option<String>, ExitCode> {
+fn resolve_diff_input(
+    diff_file: Option<std::path::PathBuf>,
+    max_bytes: u64,
+    format: OutputFormat,
+) -> Result<Option<String>, ExitCode> {
     let stdin_is_tty = io::stdin().is_terminal();
     let stdin_has_data = !stdin_is_tty;
 
     if let Some(path) = diff_file {
         if is_stdin_path(&path) {
-            return read_stdin_diff(format).map(Some);
+            return read_stdin_diff(max_bytes, format).map(Some);
         }
         if stdin_has_data {
             return Err(emit_error(
@@ -201,37 +205,97 @@ fn resolve_diff_input(diff_file: Option<std::path::PathBuf>, format: OutputForma
                 None,
             ));
         }
-        let contents = std::fs::read_to_string(&path).map_err(|err| {
-            emit_error(
-                format,
-                ErrorCode::InputInvalid,
-                "failed to read diff file",
-                Some(serde_json::json!({
-                    "path": path.display().to_string(),
-                    "error": err.to_string()
-                })),
-            )
-        })?;
+        let contents = read_diff_file(&path, max_bytes, format)?;
         return Ok(Some(contents));
     }
 
     if stdin_has_data {
-        return read_stdin_diff(format).map(Some);
+        return read_stdin_diff(max_bytes, format).map(Some);
     }
 
     Ok(None)
 }
 
-fn read_stdin_diff(format: OutputFormat) -> Result<String, ExitCode> {
-    let mut buffer = String::new();
-    io::stdin().read_to_string(&mut buffer).map_err(|err| {
+fn read_diff_file(path: &Path, max_bytes: u64, format: OutputFormat) -> Result<String, ExitCode> {
+    if let Ok(metadata) = std::fs::metadata(path) {
+        if metadata.len() > max_bytes {
+            return Err(emit_error(
+                format,
+                ErrorCode::InputInvalid,
+                "diff exceeds max_diff_bytes",
+                Some(serde_json::json!({
+                    "path": path.display().to_string(),
+                    "max_diff_bytes": max_bytes
+                })),
+            ));
+        }
+    }
+
+    let mut file = std::fs::File::open(path).map_err(|err| {
         emit_error(
             format,
             ErrorCode::InputInvalid,
-            "failed to read diff from stdin",
-            Some(serde_json::json!({ "error": err.to_string() })),
+            "failed to read diff file",
+            Some(serde_json::json!({
+                "path": path.display().to_string(),
+                "error": err.to_string()
+            })),
         )
     })?;
+
+    read_limited(
+        &mut file,
+        max_bytes,
+        format,
+        "failed to read diff file",
+        Some(serde_json::json!({ "path": path.display().to_string() })),
+    )
+}
+
+fn read_stdin_diff(max_bytes: u64, format: OutputFormat) -> Result<String, ExitCode> {
+    let mut stdin = io::stdin();
+    read_limited(
+        &mut stdin,
+        max_bytes,
+        format,
+        "failed to read diff from stdin",
+        None,
+    )
+}
+
+fn read_limited<R: Read>(
+    reader: &mut R,
+    max_bytes: u64,
+    format: OutputFormat,
+    message: &str,
+    details: Option<Value>,
+) -> Result<String, ExitCode> {
+    let mut buffer = String::new();
+    let limit = max_bytes.saturating_add(1);
+    let mut limited = reader.take(limit);
+    let details = details.unwrap_or_else(|| serde_json::json!({}));
+    limited.read_to_string(&mut buffer).map_err(|err| {
+        let mut payload = details.clone();
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("error".to_string(), serde_json::json!(err.to_string()));
+        }
+        emit_error(format, ErrorCode::InputInvalid, message, Some(payload))
+    })?;
+
+    let max_bytes_usize = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+    if buffer.as_bytes().len() > max_bytes_usize {
+        let mut payload = details;
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("max_diff_bytes".to_string(), serde_json::json!(max_bytes));
+        }
+        return Err(emit_error(
+            format,
+            ErrorCode::InputInvalid,
+            "diff exceeds max_diff_bytes",
+            Some(payload),
+        ));
+    }
+
     Ok(buffer)
 }
 
