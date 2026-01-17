@@ -388,3 +388,21 @@ Commit message rules:\n\
 - Summary is imperative, 50-72 chars.\n\
 - Body is 1-3 short lines (no leading hyphens).\n\
 If any required field is unknown, infer the best value.";
+
+pub fn build_retry_prompt(base: &Prompt, errors: &[String]) -> Prompt {
+    if errors.is_empty() {
+        return base.clone();
+    }
+    let mut system = base.system.clone();
+    system.push_str("\n\nYour previous response failed semantic validation:\n");
+    for error in errors {
+        system.push_str("- ");
+        system.push_str(error);
+        system.push('\n');
+    }
+    system.push_str("Return corrected JSON only that fully satisfies the schema and rules.");
+    Prompt {
+        system,
+        user: base.user.clone(),
+    }
+}

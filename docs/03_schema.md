@@ -94,11 +94,12 @@ Returned by `atomc plan` and `/v1/commit-plan`.
 Fields:
 - `id` (string, required): unique within the plan.
 - `type` (string, required): conventional commit type.
-- `scope` (string or null, required): kebab-case or null for global.
+- `scope` (string or null, required): kebab-case (lowercase letters, digits,
+  hyphens only) or null for global.
 - `summary` (string, required): 50-72 chars, imperative.
 - `body` (array of strings, required): 1-3 bullet lines.
 - `files` (array of strings, required): repo-relative paths.
-- `hunks` (array, required): optional hunk targets (may be empty).
+- `hunks` (array, required): must be empty in MVP.
 
 ### Commit Types
 Allowed values for `type`:
@@ -251,7 +252,15 @@ Fields:
             "ci"
           ]
         },
-        "scope": {"type": ["string", "null"]},
+        "scope": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+            },
+            {"type": "null"}
+          ]
+        },
         "summary": {"type": "string", "minLength": 50, "maxLength": 72},
         "body": {
           "type": "array",
@@ -266,6 +275,7 @@ Fields:
         },
         "hunks": {
           "type": "array",
+          "maxItems": 0,
           "items": {"$ref": "#/$defs/hunk"}
         }
       },
@@ -353,7 +363,15 @@ Fields:
             "ci"
           ]
         },
-        "scope": {"type": ["string", "null"]},
+        "scope": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+            },
+            {"type": "null"}
+          ]
+        },
         "summary": {"type": "string", "minLength": 50, "maxLength": 72},
         "body": {
           "type": "array",
@@ -368,6 +386,7 @@ Fields:
         },
         "hunks": {
           "type": "array",
+          "maxItems": 0,
           "items": {"$ref": "#/$defs/hunk"}
         }
       },

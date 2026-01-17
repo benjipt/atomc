@@ -64,7 +64,15 @@
             "ci"
           ]
         },
-        "scope": {"type": ["string", "null"]},
+        "scope": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+            },
+            {"type": "null"}
+          ]
+        },
         "summary": {"type": "string", "minLength": 50, "maxLength": 72},
         "body": {
           "type": "array",
@@ -79,6 +87,7 @@
         },
         "hunks": {
           "type": "array",
+          "maxItems": 0,
           "items": {"$ref": "#/$defs/hunk"}
         }
       },
