@@ -1,4 +1,5 @@
 use jsonschema::Validator;
+use once_cell::sync::Lazy;
 use serde_json::Value;
 
 #[derive(Debug, Clone, Copy)]
@@ -30,9 +31,18 @@ pub fn validate_schema(kind: SchemaKind, instance: &Value) -> Result<(), SchemaV
 
 fn schema_for(kind: SchemaKind) -> Result<Validator, SchemaValidationError> {
     match kind {
-        SchemaKind::CommitPlan => compile_schema(COMMIT_PLAN_SCHEMA_STR),
-        SchemaKind::CommitApply => compile_schema(COMMIT_APPLY_SCHEMA_STR),
-        SchemaKind::ErrorResponse => compile_schema(ERROR_SCHEMA_STR),
+        SchemaKind::CommitPlan => match COMMIT_PLAN_SCHEMA.as_ref() {
+            Ok(validator) => Ok(validator.clone()),
+            Err(_) => compile_schema(COMMIT_PLAN_SCHEMA_STR),
+        },
+        SchemaKind::CommitApply => match COMMIT_APPLY_SCHEMA.as_ref() {
+            Ok(validator) => Ok(validator.clone()),
+            Err(_) => compile_schema(COMMIT_APPLY_SCHEMA_STR),
+        },
+        SchemaKind::ErrorResponse => match ERROR_SCHEMA.as_ref() {
+            Ok(validator) => Ok(validator.clone()),
+            Err(_) => compile_schema(ERROR_SCHEMA_STR),
+        },
     }
 }
 
@@ -42,6 +52,13 @@ fn compile_schema(schema_str: &str) -> Result<Validator, SchemaValidationError> 
         .build(&schema_value)
         .map_err(|err| SchemaValidationError::SchemaCompile(err.to_string()))
 }
+
+static COMMIT_PLAN_SCHEMA: Lazy<Result<Validator, SchemaValidationError>> =
+    Lazy::new(|| compile_schema(COMMIT_PLAN_SCHEMA_STR));
+static COMMIT_APPLY_SCHEMA: Lazy<Result<Validator, SchemaValidationError>> =
+    Lazy::new(|| compile_schema(COMMIT_APPLY_SCHEMA_STR));
+static ERROR_SCHEMA: Lazy<Result<Validator, SchemaValidationError>> =
+    Lazy::new(|| compile_schema(ERROR_SCHEMA_STR));
 
 const COMMIT_PLAN_SCHEMA_STR: &str =
     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../schemas/v1/commit-plan.json"));
