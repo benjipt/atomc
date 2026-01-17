@@ -21,3 +21,5 @@ ulid.workspace = true
 [dev-dependencies]
 tower = "0.5.3"
 http-body-util = "0.1.2"
+reqwest.workspace = true
+tempfile = "3.12.0"
