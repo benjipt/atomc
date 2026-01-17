@@ -80,9 +80,11 @@ pub fn resolve_config(
     overrides: PartialConfig,
 ) -> Result<ResolvedConfig, ConfigError> {
     let env_path = config_path_from_env();
-    let default_path = default_config_path()?;
-    let path = cli_path.clone().or(env_path.clone()).unwrap_or(default_path);
     let required = cli_path.is_some() || env_path.is_some();
+    let path = cli_path
+        .clone()
+        .or(env_path.clone())
+        .unwrap_or(default_config_path()?);
 
     let file_config = load_config_file(&path, required)?;
     let env_config = load_env_config()?;
