@@ -31,9 +31,9 @@ pub struct PlanArgs {
     pub repo: Option<PathBuf>,
     #[arg(long = "diff-file")]
     pub diff_file: Option<PathBuf>,
-    #[arg(long, value_enum, default_value_t = DiffMode::All)]
-    pub diff_mode: DiffMode,
-    #[arg(long, default_value_t = true)]
+    #[arg(long, value_enum)]
+    pub diff_mode: Option<DiffMode>,
+    #[arg(long, action = ArgAction::SetTrue)]
     pub include_untracked: bool,
     #[arg(long = "no-include-untracked", action = ArgAction::SetTrue, conflicts_with = "include_untracked")]
     pub no_include_untracked: bool,
@@ -47,13 +47,14 @@ pub struct PlanArgs {
     pub timeout: Option<u64>,
 }
 
-#[allow(dead_code)] // Used once CLI wiring is implemented.
 impl PlanArgs {
-    pub fn resolved_include_untracked(&self) -> bool {
+    pub fn include_untracked_override(&self) -> Option<bool> {
         if self.no_include_untracked {
-            false
+            Some(false)
+        } else if self.include_untracked {
+            Some(true)
         } else {
-            self.include_untracked
+            None
         }
     }
 }
@@ -64,9 +65,9 @@ pub struct ApplyArgs {
     pub repo: PathBuf,
     #[arg(long = "diff-file")]
     pub diff_file: Option<PathBuf>,
-    #[arg(long, value_enum, default_value_t = DiffMode::All)]
-    pub diff_mode: DiffMode,
-    #[arg(long, default_value_t = true)]
+    #[arg(long, value_enum)]
+    pub diff_mode: Option<DiffMode>,
+    #[arg(long, action = ArgAction::SetTrue)]
     pub include_untracked: bool,
     #[arg(long = "no-include-untracked", action = ArgAction::SetTrue, conflicts_with = "include_untracked")]
     pub no_include_untracked: bool,
@@ -82,13 +83,14 @@ pub struct ApplyArgs {
     pub timeout: Option<u64>,
 }
 
-#[allow(dead_code)] // Used once CLI wiring is implemented.
 impl ApplyArgs {
-    pub fn resolved_include_untracked(&self) -> bool {
+    pub fn include_untracked_override(&self) -> Option<bool> {
         if self.no_include_untracked {
-            false
+            Some(false)
+        } else if self.include_untracked {
+            Some(true)
         } else {
-            self.include_untracked
+            None
         }
     }
 }
