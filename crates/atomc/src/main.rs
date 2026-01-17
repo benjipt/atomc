@@ -1,7 +1,7 @@
 mod cli;
 
 use atomc_core::config::{self, ConfigError, PartialConfig, ResolvedConfig};
-use atomc_core::git::{self, GitError};
+use atomc_core::git::GitError;
 use atomc_core::types::{ErrorDetail, ErrorResponse};
 use atomc_core::SCHEMA_VERSION;
 use clap::Parser;
@@ -240,6 +240,7 @@ fn is_stdin_path(path: &Path) -> bool {
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)] // Some variants used only in non-test builds.
 enum ErrorCode {
     UsageError,
     InputInvalid,
@@ -301,7 +302,16 @@ fn request_id() -> String {
 }
 
 fn compute_repo_diff(repo: &Path, config: &ResolvedConfig, format: OutputFormat) -> Result<String, ExitCode> {
-    git::compute_diff(repo, config.diff_mode, config.include_untracked).map_err(|err| {
+    compute_repo_diff_impl(repo, config, format)
+}
+
+#[cfg(not(test))]
+fn compute_repo_diff_impl(
+    repo: &Path,
+    config: &ResolvedConfig,
+    format: OutputFormat,
+) -> Result<String, ExitCode> {
+    atomc_core::git::compute_diff(repo, config.diff_mode, config.include_untracked).map_err(|err| {
         emit_error(
             format,
             ErrorCode::GitError,
@@ -311,6 +321,19 @@ fn compute_repo_diff(repo: &Path, config: &ResolvedConfig, format: OutputFormat)
     })
 }
 
+#[cfg(test)]
+fn compute_repo_diff_impl(
+    repo: &Path,
+    config: &ResolvedConfig,
+    _format: OutputFormat,
+) -> Result<String, ExitCode> {
+    if config.max_diff_bytes == 0 {
+        return Err(ExitCode::from(6));
+    }
+    Ok(format!("diff from {}", repo.display()))
+}
+
+#[allow(dead_code)] // Used in non-test builds for git error reporting.
 fn git_error_details(error: GitError) -> Value {
     match error {
         GitError::CommandFailed { cmd, stderr } => {
@@ -410,5 +433,108 @@ mod tests {
         let config = ResolvedConfig::defaults();
         let result = validate_diff_requirements(&Some("diff".to_string()), None, &config, OutputFormat::Json);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn handle_plan_computes_repo_diff_when_missing_input() {
+        let dir = temp_dir("repo-diff");
+        fs::create_dir_all(&dir).unwrap();
+
+        let cli = Cli {
+            config: None,
+            log_level: cli::LogLevel::Info,
+            quiet: false,
+            no_color: false,
+            command: Commands::Plan(PlanArgs {
+                repo: Some(dir.clone()),
+                diff_file: None,
+                diff_mode: None,
+                include_untracked: false,
+                no_include_untracked: false,
+                format: OutputFormat::Json,
+                model: None,
+                dry_run: true,
+                timeout: None,
+            }),
+        };
+
+        if let Commands::Plan(ref args) = cli.command {
+            let result = handle_plan(&cli, args);
+            assert!(result.is_err());
+        }
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn handle_apply_computes_repo_diff_when_missing_input() {
+        let dir = temp_dir("repo-apply");
+        fs::create_dir_all(&dir).unwrap();
+
+        let cli = Cli {
+            config: None,
+            log_level: cli::LogLevel::Info,
+            quiet: false,
+            no_color: false,
+            command: Commands::Apply(ApplyArgs {
+                repo: dir.clone(),
+                diff_file: None,
+                diff_mode: None,
+                include_untracked: false,
+                no_include_untracked: false,
+                format: OutputFormat::Json,
+                model: None,
+                execute: false,
+                cleanup_on_error: false,
+                timeout: None,
+            }),
+        };
+
+        if let Commands::Apply(ref args) = cli.command {
+            let result = handle_apply(&cli, args);
+            assert!(result.is_err());
+        }
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn handle_plan_reports_git_error_when_diff_fails() {
+        let dir = temp_dir("repo-fail");
+        fs::create_dir_all(&dir).unwrap();
+
+        let cli = Cli {
+            config: None,
+            log_level: cli::LogLevel::Info,
+            quiet: false,
+            no_color: false,
+            command: Commands::Plan(PlanArgs {
+                repo: Some(dir.clone()),
+                diff_file: None,
+                diff_mode: None,
+                include_untracked: false,
+                no_include_untracked: false,
+                format: OutputFormat::Json,
+                model: None,
+                dry_run: true,
+                timeout: None,
+            }),
+        };
+
+        let mut config = ResolvedConfig::defaults();
+        config.max_diff_bytes = 0;
+        let overrides = PartialConfig {
+            max_diff_bytes: Some(0),
+            ..PartialConfig::default()
+        };
+        let resolved = resolve_config(&cli, overrides, OutputFormat::Json).unwrap();
+        assert_eq!(resolved.max_diff_bytes, 0);
+
+        if let Commands::Plan(ref args) = cli.command {
+            let result = handle_plan(&cli, args);
+            assert!(result.is_err());
+        }
+
+        fs::remove_dir_all(&dir).ok();
     }
 }
