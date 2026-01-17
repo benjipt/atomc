@@ -1,0 +1,29 @@
+{
+  "schema_version": "v1",
+  "plan": [
+    {
+      "id": "commit-1",
+      "type": "refactor",
+      "scope": "diff-utils",
+      "summary": "refactor parsing helpers into shared diff utilities module",
+      "body": [
+        "Rename parser to clarify line-based intent",
+        "Keep parsing behavior consistent"
+      ],
+      "files": ["src/diff.rs"],
+      "hunks": []
+    },
+    {
+      "id": "commit-2",
+      "type": "feat",
+      "scope": "hashing",
+      "summary": "add diff hashing support for planned commit verification",
+      "body": [
+        "Add helper to hash full diff inputs",
+        "Reuse existing hash implementation"
+      ],
+      "files": ["src/hash.rs"],
+      "hunks": []
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "schema_version": "v1",
+  "plan": [
+    {
+      "id": "commit-1",
+      "type": "docs",
+      "scope": "readme",
+      "summary": "document usage examples and update README guidance",
+      "body": [
+        "Explain CLI usage and argument help",
+        "Add usage section to orient new users"
+      ],
+      "files": ["README.md"],
+      "hunks": []
+    },
+    {
+      "id": "commit-2",
+      "type": "feat",
+      "scope": "config",
+      "summary": "add configuration loader for CLI defaults and env overrides",
+      "body": [
+        "Introduce environment loader for config defaults",
+        "Prepare config for CLI overrides"
+      ],
+      "files": ["src/config.rs"],
+      "hunks": []
+    }
+  ]
+}

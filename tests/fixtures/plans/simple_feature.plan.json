@@ -1,0 +1,17 @@
+{
+  "schema_version": "v1",
+  "plan": [
+    {
+      "id": "commit-1",
+      "type": "feat",
+      "scope": "math",
+      "summary": "add subtraction helper for arithmetic utilities module",
+      "body": [
+        "Introduce sub helper to mirror existing add function",
+        "Keep API consistent for future arithmetic operations"
+      ],
+      "files": ["src/lib.rs"],
+      "hunks": []
+    }
+  ]
+}
