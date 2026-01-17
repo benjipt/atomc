@@ -8,8 +8,9 @@ HTTP server. It is the canonical reference for agent integrations.
 - Initial value: `v1`.
 - Clients must ignore unknown fields for forward compatibility.
 
-## Common Response Envelope
-All responses share these top-level fields:
+## Common Response Fields
+All responses include `schema_version`. `request_id` and `warnings` may
+be present when available.
 
 ```json
 {
@@ -129,13 +130,13 @@ Used for any failure; never mixed with a success payload.
 ```json
 {
   "schema_version": "v1",
+  "request_id": "req_789",
   "error": {
     "code": "input_invalid",
     "message": "stdin is empty",
     "details": {
       "hint": "pipe a git diff or use --diff-file"
-    },
-    "request_id": "req_789"
+    }
   }
 }
 ```
@@ -145,7 +146,6 @@ Fields:
 - `code` (string, required): machine-readable error code.
 - `message` (string, required): human-readable summary.
 - `details` (object, optional): additional context.
-- `request_id` (string, optional): trace id for logs.
 
 ### Error Codes (initial)
 - `usage_error`

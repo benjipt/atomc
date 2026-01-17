@@ -65,16 +65,25 @@ atomc serve [options]
 ```
 {
   "schema_version": "v1",
+  "request_id": "req_123",
   "error": {
     "code": "input_invalid",
     "message": "stdin is empty",
     "details": {
       "hint": "pipe a git diff or use --diff-file"
-    },
-    "request_id": "req_123"
+    }
   }
 }
 ```
+
+### Error Codes (initial)
+- `usage_error`
+- `input_invalid`
+- `config_error`
+- `llm_runtime_error`
+- `llm_parse_error`
+- `git_error`
+- `timeout`
 
 ### Human-readable
 - `--format human` prints summaries and bullets for direct use.
