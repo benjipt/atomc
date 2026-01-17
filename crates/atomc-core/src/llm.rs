@@ -1,6 +1,7 @@
 use crate::config::{DiffMode, ResolvedConfig, Runtime};
 use crate::schema::{self, SchemaKind};
 use crate::types::CommitPlan;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
@@ -101,7 +102,7 @@ impl OllamaClient {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
-            http: reqwest::Client::new(),
+            http: HTTP_CLIENT.clone(),
         }
     }
 
@@ -136,7 +137,10 @@ impl OllamaClient {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let body = response
+                .text()
+                .await
+                .map_err(|err| LlmError::Runtime(format!("status {status}: {err}")))?;
             return Err(LlmError::Runtime(format!(
                 "status {status}: {body}"
             )));
@@ -212,6 +216,8 @@ struct OllamaGenerateResponse {
     response: Option<String>,
     error: Option<String>,
 }
+
+static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
 
 const SYSTEM_PROMPT: &str = "You are a local commit planning assistant.\n\
 Return a single JSON object that matches the CommitPlan schema.\n\
