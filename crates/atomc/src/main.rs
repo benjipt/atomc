@@ -133,13 +133,12 @@ fn handle_apply(cli: &Cli, args: &ApplyArgs) -> Result<(), ExitCode> {
             repo: args.repo.as_path(),
             plan: &plan.plan,
             diff: &diff,
-            source: source.clone(),
             diff_mode: config.diff_mode,
             include_untracked: config.include_untracked,
             expected_diff_hash: plan.input.as_ref().and_then(|input| input.diff_hash.clone()),
             cleanup_on_error: args.cleanup_on_error,
         };
-        git::apply_plan(request).map_err(|err| {
+        execute_apply_plan(request).map_err(|err| {
             emit_error(
                 args.format,
                 ErrorCode::GitError,
@@ -526,6 +525,23 @@ fn request_commit_plan_impl(
             files: vec!["docs/02_cli_spec.md".to_string()],
             hunks: Vec::new(),
         }],
+    })
+}
+
+fn execute_apply_plan(request: git::ApplyRequest<'_>) -> Result<Vec<ApplyResult>, GitError> {
+    execute_apply_plan_impl(request)
+}
+
+#[cfg(not(test))]
+fn execute_apply_plan_impl(request: git::ApplyRequest<'_>) -> Result<Vec<ApplyResult>, GitError> {
+    git::apply_plan(request)
+}
+
+#[cfg(test)]
+fn execute_apply_plan_impl(_request: git::ApplyRequest<'_>) -> Result<Vec<ApplyResult>, GitError> {
+    Err(GitError::CommandFailed {
+        cmd: "git apply (test)".to_string(),
+        stderr: "simulated failure".to_string(),
     })
 }
 
@@ -970,6 +986,39 @@ mod tests {
         if let Commands::Apply(ref args) = cli.command {
             let result = handle_apply(&cli, args);
             assert!(result.is_ok());
+        }
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn handle_apply_execute_reports_git_error() {
+        let _lock = lock_env();
+        let dir = temp_dir("repo-exec");
+        fs::create_dir_all(&dir).unwrap();
+
+        let cli = Cli {
+            config: None,
+            log_level: cli::LogLevel::Info,
+            quiet: false,
+            no_color: false,
+            command: Commands::Apply(ApplyArgs {
+                repo: dir.clone(),
+                diff_file: None,
+                diff_mode: None,
+                include_untracked: false,
+                no_include_untracked: false,
+                format: OutputFormat::Json,
+                model: None,
+                execute: true,
+                cleanup_on_error: true,
+                timeout: None,
+            }),
+        };
+
+        if let Commands::Apply(ref args) = cli.command {
+            let result = handle_apply(&cli, args);
+            assert_eq!(result.unwrap_err(), ExitCode::from(6));
         }
 
         fs::remove_dir_all(&dir).ok();
