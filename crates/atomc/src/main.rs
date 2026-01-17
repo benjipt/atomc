@@ -3,7 +3,7 @@ mod cli;
 use atomc_core::config::{self, ConfigError, PartialConfig, ResolvedConfig};
 use atomc_core::git::{self, GitError};
 use atomc_core::hash;
-use atomc_core::llm::{self, LlmError, PromptContext};
+use atomc_core::llm::{self, LlmError, Prompt, PromptContext};
 use atomc_core::schema::{self, SchemaKind};
 use atomc_core::semantic::{self, ScopePolicy, SemanticWarning};
 use atomc_core::types::{
@@ -106,8 +106,7 @@ fn handle_plan(cli: &Cli, args: &PlanArgs) -> Result<(), ExitCode> {
         diff: &diff,
     });
 
-    let mut plan = request_commit_plan(&config, &prompt, args.format)?;
-    let warnings = apply_semantic_validation(&plan, args.format)?;
+    let (mut plan, warnings) = request_commit_plan_with_retry(&config, &prompt, args.format)?;
     plan.schema_version = SCHEMA_VERSION.to_string();
     plan.request_id = Some(request_id.clone());
     plan.input = Some(build_input_meta(source.clone(), &config, &diff));
@@ -169,8 +168,7 @@ fn handle_apply(cli: &Cli, args: &ApplyArgs) -> Result<(), ExitCode> {
         diff: &diff,
     });
 
-    let mut plan = request_commit_plan(&config, &prompt, args.format)?;
-    let warnings = apply_semantic_validation(&plan, args.format)?;
+    let (mut plan, warnings) = request_commit_plan_with_retry(&config, &prompt, args.format)?;
     plan.schema_version = SCHEMA_VERSION.to_string();
     plan.request_id = Some(request_id.clone());
     plan.input = Some(build_input_meta(source.clone(), &config, &diff));
@@ -345,12 +343,8 @@ async fn plan_handler(
         diff: &diff,
     });
 
-    let mut plan = match request_commit_plan_http(&config, &prompt, &request_id).await {
-        Ok(plan) => plan,
-        Err(response) => return response,
-    };
-    let warnings = match semantic_warnings_http(&plan, &request_id) {
-        Ok(warnings) => warnings,
+    let (mut plan, warnings) = match request_commit_plan_http_with_retry(&config, &prompt, &request_id).await {
+        Ok(result) => result,
         Err(response) => return response,
     };
 
@@ -426,15 +420,10 @@ async fn apply_handler(
             diff: &diff,
         });
 
-        let plan = match request_commit_plan_http(&config, &prompt, &request_id).await {
-            Ok(plan) => plan,
+        match request_commit_plan_http_with_retry(&config, &prompt, &request_id).await {
+            Ok(result) => result,
             Err(response) => return response,
-        };
-        let warnings = match semantic_warnings_http(&plan, &request_id) {
-            Ok(warnings) => warnings,
-            Err(response) => return response,
-        };
-        (plan, warnings)
+        }
     };
 
     plan.schema_version = SCHEMA_VERSION.to_string();
@@ -584,16 +573,6 @@ fn validate_diff_size(diff: &str, max_bytes: u64, request_id: &str) -> Result<()
     Ok(())
 }
 
-async fn request_commit_plan_http(
-    config: &ResolvedConfig,
-    prompt: &llm::Prompt,
-    request_id: &str,
-) -> Result<CommitPlan, Response> {
-    request_commit_plan_http_impl(config, prompt)
-        .await
-        .map_err(|err| llm_error_response(err, request_id))
-}
-
 #[cfg(not(test))]
 async fn request_commit_plan_http_impl(
     config: &ResolvedConfig,
@@ -616,21 +595,53 @@ async fn request_commit_plan_http_impl(
     }
 }
 
-fn semantic_warnings_http(plan: &CommitPlan, request_id: &str) -> Result<Vec<Warning>, Response> {
-    match semantic::validate_commit_units(&plan.plan, ScopePolicy::Warn) {
-        Ok(report) => Ok(semantic_warnings_to_warnings(&report.warnings)),
+async fn request_commit_plan_http_with_retry(
+    config: &ResolvedConfig,
+    prompt: &Prompt,
+    request_id: &str,
+) -> Result<(CommitPlan, Vec<Warning>), Response> {
+    let mut plan = match request_commit_plan_http_impl(config, prompt).await {
+        Ok(plan) => plan,
+        Err(err) => {
+            if matches!(err, LlmError::Parse(_)) {
+                let retry_prompt = llm::build_retry_prompt(prompt, &[err.to_string()]);
+                request_commit_plan_http_impl(config, &retry_prompt)
+                    .await
+                    .map_err(|err| llm_error_response(err, request_id))?
+            } else {
+                return Err(llm_error_response(err, request_id));
+            }
+        }
+    };
+    match semantic_validation_report(&plan) {
+        Ok(warnings) => Ok((plan, warnings)),
         Err(errors) => {
-            let details = serde_json::json!({
-                "errors": errors.iter().map(|err| err.to_string()).collect::<Vec<_>>()
-            });
-            Err(error_response(
-                ErrorCode::LlmParseError,
-                "semantic validation failed",
-                Some(details),
-                request_id,
-            ))
+            let retry_prompt = llm::build_retry_prompt(prompt, &errors);
+            plan = request_commit_plan_http_impl(config, &retry_prompt)
+                .await
+                .map_err(|err| llm_error_response(err, request_id))?;
+            match semantic_validation_report(&plan) {
+                Ok(warnings) => Ok((plan, warnings)),
+                Err(errors) => Err(error_response(
+                    ErrorCode::LlmParseError,
+                    "semantic validation failed",
+                    Some(semantic_error_details(&errors)),
+                    request_id,
+                )),
+            }
         }
     }
+}
+
+fn semantic_validation_report(plan: &CommitPlan) -> Result<Vec<Warning>, Vec<String>> {
+    match semantic::validate_commit_units(&plan.plan, ScopePolicy::Warn) {
+        Ok(report) => Ok(semantic_warnings_to_warnings(&report.warnings)),
+        Err(errors) => Err(errors.iter().map(|err| err.to_string()).collect()),
+    }
+}
+
+fn semantic_error_details(errors: &[String]) -> Value {
+    serde_json::json!({ "errors": errors })
 }
 
 fn build_request_plan(plan: Vec<CommitUnit>, request_id: &str) -> Result<CommitPlan, Response> {
@@ -657,19 +668,14 @@ fn build_request_plan(plan: Vec<CommitUnit>, request_id: &str) -> Result<CommitP
 }
 
 fn semantic_warnings_request(plan: &CommitPlan, request_id: &str) -> Result<Vec<Warning>, Response> {
-    match semantic::validate_commit_units(&plan.plan, ScopePolicy::Warn) {
-        Ok(report) => Ok(semantic_warnings_to_warnings(&report.warnings)),
-        Err(errors) => {
-            let details = serde_json::json!({
-                "errors": errors.iter().map(|err| err.to_string()).collect::<Vec<_>>()
-            });
-            Err(error_response(
-                ErrorCode::InputInvalid,
-                "semantic validation failed",
-                Some(details),
-                request_id,
-            ))
-        }
+    match semantic_validation_report(plan) {
+        Ok(warnings) => Ok(warnings),
+        Err(errors) => Err(error_response(
+            ErrorCode::InputInvalid,
+            "semantic validation failed",
+            Some(semantic_error_details(&errors)),
+            request_id,
+        )),
     }
 }
 
@@ -914,23 +920,6 @@ fn build_input_meta(source: InputSource, config: &ResolvedConfig, diff: &str) ->
     }
 }
 
-fn apply_semantic_validation(plan: &CommitPlan, format: OutputFormat) -> Result<Vec<Warning>, ExitCode> {
-    match semantic::validate_commit_units(&plan.plan, ScopePolicy::Warn) {
-        Ok(report) => Ok(semantic_warnings_to_warnings(&report.warnings)),
-        Err(errors) => {
-            let details = serde_json::json!({
-                "errors": errors.iter().map(|err| err.to_string()).collect::<Vec<_>>()
-            });
-            Err(emit_error(
-                format,
-                ErrorCode::LlmParseError,
-                "semantic validation failed",
-                Some(details),
-            ))
-        }
-    }
-}
-
 fn build_apply_response(
     plan: CommitPlan,
     results: Vec<ApplyResult>,
@@ -1113,12 +1102,40 @@ fn read_limited<R: Read>(
     Ok(buffer)
 }
 
-fn request_commit_plan(
+fn request_commit_plan_with_retry(
     config: &ResolvedConfig,
-    prompt: &llm::Prompt,
+    prompt: &Prompt,
     format: OutputFormat,
-) -> Result<CommitPlan, ExitCode> {
-    request_commit_plan_impl(config, prompt).map_err(|err| map_llm_error(format, err))
+) -> Result<(CommitPlan, Vec<Warning>), ExitCode> {
+    let mut plan = match request_commit_plan_impl(config, prompt) {
+        Ok(plan) => plan,
+        Err(err) => {
+            if matches!(err, LlmError::Parse(_)) {
+                let retry_prompt = llm::build_retry_prompt(prompt, &[err.to_string()]);
+                request_commit_plan_impl(config, &retry_prompt)
+                    .map_err(|err| map_llm_error(format, err))?
+            } else {
+                return Err(map_llm_error(format, err));
+            }
+        }
+    };
+    match semantic_validation_report(&plan) {
+        Ok(warnings) => Ok((plan, warnings)),
+        Err(errors) => {
+            let retry_prompt = llm::build_retry_prompt(prompt, &errors);
+            plan = request_commit_plan_impl(config, &retry_prompt)
+                .map_err(|err| map_llm_error(format, err))?;
+            match semantic_validation_report(&plan) {
+                Ok(warnings) => Ok((plan, warnings)),
+                Err(errors) => Err(emit_error(
+                    format,
+                    ErrorCode::LlmParseError,
+                    "semantic validation failed",
+                    Some(semantic_error_details(&errors)),
+                )),
+            }
+        }
+    }
 }
 
 #[cfg(not(test))]
