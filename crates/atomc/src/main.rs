@@ -6,8 +6,8 @@ use atomc_core::hash;
 use atomc_core::llm::{self, LlmError, PromptContext};
 use atomc_core::semantic::{self, ScopePolicy, SemanticWarning};
 use atomc_core::types::{
-    CommitPlan, DiffMode as OutputDiffMode, ErrorDetail, ErrorResponse, InputMeta, InputSource,
-    Warning,
+    ApplyResult, ApplyStatus, CommitApplyResponse, CommitPlan, DiffMode as OutputDiffMode,
+    ErrorDetail, ErrorResponse, InputMeta, InputSource, Warning,
 };
 use atomc_core::SCHEMA_VERSION;
 use clap::Parser;
@@ -97,17 +97,49 @@ fn handle_apply(cli: &Cli, args: &ApplyArgs) -> Result<(), ExitCode> {
     validate_repo_path(&args.repo, args.format)?;
 
     let mut diff = resolve_diff_input(args.diff_file.clone(), config.max_diff_bytes, args.format)?;
+    let mut source = InputSource::Diff;
     if diff.is_none() {
         diff = Some(compute_repo_diff(args.repo.as_path(), &config, args.format)?);
+        source = InputSource::Repo;
     }
     validate_diff_requirements(&diff, Some(args.repo.as_path()), &config, args.format)?;
 
-    Err(emit_error(
-        args.format,
-        ErrorCode::UsageError,
-        "command handling not yet implemented",
-        None,
-    ))
+    if args.execute {
+        return Err(emit_error(
+            args.format,
+            ErrorCode::UsageError,
+            "apply execution is not yet implemented",
+            None,
+        ));
+    }
+
+    let diff = diff.ok_or_else(|| {
+        emit_error(
+            args.format,
+            ErrorCode::InputInvalid,
+            "diff input is missing",
+            None,
+        )
+    })?;
+
+    let prompt = llm::build_prompt(PromptContext {
+        repo_path: Some(args.repo.as_path()),
+        diff_mode: input_diff_mode(&source, config.diff_mode),
+        include_untracked: input_include_untracked(&source, config.include_untracked),
+        git_status: None,
+        diff: &diff,
+    });
+
+    let mut plan = request_commit_plan(&config, &prompt, args.format)?;
+    let warnings = apply_semantic_validation(&plan, args.format)?;
+    plan.schema_version = SCHEMA_VERSION.to_string();
+    plan.request_id = Some(request_id());
+    plan.input = Some(build_input_meta(source.clone(), &config, &diff));
+    plan.warnings = merge_warnings(plan.warnings.take(), warnings.clone());
+
+    let response = build_apply_response(plan, source, &config, &diff);
+
+    emit_apply(args.format, &response)
 }
 
 fn resolve_config(
@@ -265,6 +297,35 @@ fn apply_semantic_validation(plan: &CommitPlan, format: OutputFormat) -> Result<
                 Some(details),
             ))
         }
+    }
+}
+
+fn build_apply_response(
+    plan: CommitPlan,
+    source: InputSource,
+    config: &ResolvedConfig,
+    diff: &str,
+) -> CommitApplyResponse {
+    let results = plan
+        .plan
+        .iter()
+        .map(|unit| ApplyResult {
+            id: unit.id.clone(),
+            status: ApplyStatus::Planned,
+            commit_hash: None,
+            error: None,
+        })
+        .collect();
+
+    let request_id = plan.request_id.clone().or_else(|| Some(request_id()));
+
+    CommitApplyResponse {
+        schema_version: SCHEMA_VERSION.to_string(),
+        request_id,
+        warnings: plan.warnings,
+        input: Some(build_input_meta(source, config, diff)),
+        plan: plan.plan,
+        results,
     }
 }
 
@@ -571,6 +632,25 @@ fn emit_plan(format: OutputFormat, plan: &CommitPlan) -> Result<(), ExitCode> {
     }
 }
 
+fn emit_apply(format: OutputFormat, response: &CommitApplyResponse) -> Result<(), ExitCode> {
+    match format {
+        OutputFormat::Json => {
+            let payload = serde_json::to_string(response).unwrap_or_else(|_| {
+                format!(
+                    "{{\"schema_version\":\"{}\",\"error\":\"failed to serialize apply response\"}}",
+                    SCHEMA_VERSION
+                )
+            });
+            println!("{payload}");
+            Ok(())
+        }
+        OutputFormat::Human => {
+            print_apply_human(response);
+            Ok(())
+        }
+    }
+}
+
 fn print_plan_human(plan: &CommitPlan) {
     println!("Commit plan ({} commits):", plan.plan.len());
     for (idx, unit) in plan.plan.iter().enumerate() {
@@ -588,6 +668,26 @@ fn print_plan_human(plan: &CommitPlan) {
     }
 }
 
+fn print_apply_human(response: &CommitApplyResponse) {
+    println!("Apply plan ({} commits):", response.plan.len());
+    for (idx, unit) in response.plan.iter().enumerate() {
+        let header = match unit.scope.as_deref() {
+            Some(scope) => format!("{}[{}]: {}", commit_type_str(&unit.type_), scope, unit.summary),
+            None => format!("{}: {}", commit_type_str(&unit.type_), unit.summary),
+        };
+        println!("{}. {}", idx + 1, header);
+        for line in &unit.body {
+            println!("   {}", line);
+        }
+        if !unit.files.is_empty() {
+            println!("   files: {}", unit.files.join(", "));
+        }
+        if let Some(result) = response.results.iter().find(|res| res.id == unit.id) {
+            println!("   status: {}", apply_status_str(&result.status));
+        }
+    }
+}
+
 fn commit_type_str(commit_type: &atomc_core::types::CommitType) -> &'static str {
     match commit_type {
         atomc_core::types::CommitType::Feat => "feat",
@@ -600,6 +700,15 @@ fn commit_type_str(commit_type: &atomc_core::types::CommitType) -> &'static str 
         atomc_core::types::CommitType::Build => "build",
         atomc_core::types::CommitType::Perf => "perf",
         atomc_core::types::CommitType::Ci => "ci",
+    }
+}
+
+fn apply_status_str(status: &ApplyStatus) -> &'static str {
+    match status {
+        ApplyStatus::Planned => "planned",
+        ApplyStatus::Applied => "applied",
+        ApplyStatus::Skipped => "skipped",
+        ApplyStatus::Failed => "failed",
     }
 }
 
@@ -833,7 +942,7 @@ mod tests {
 
         if let Commands::Apply(ref args) = cli.command {
             let result = handle_apply(&cli, args);
-            assert!(result.is_err());
+            assert!(result.is_ok());
         }
 
         fs::remove_dir_all(&dir).ok();
