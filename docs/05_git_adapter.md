@@ -21,24 +21,27 @@ Applies to `apply` and server-side commit execution.
 
 ## Safety Model
 - The adapter snapshots the diff used to generate the plan (or receives
-  it from the orchestrator) and computes `diff_hash` (SHA-256).
-- Before each commit, the adapter verifies the staged diff matches the
-  plan’s file/hunk selection.
-- If the working tree changes after planning, abort with `git_error`.
+  it from the orchestrator) and computes `diff_hash` (SHA-256) for the
+  full diff.
+- Before apply and before each commit, recompute the current diff using
+  the same diff settings and compare against `input.diff_hash`.
+- Before each commit, verify the staged diff matches the plan’s
+  file/hunk selection.
 
 ## Staging Strategy (MVP)
 - Stage by file path only.
 - For each commit unit:
   1) Clear index for target files: `git reset -q -- <files>`.
   2) Stage target files: `git add -- <files>`.
-  3) Verify `git diff --staged` matches expected file list and diff hash.
+  3) Verify `git diff --staged` matches expected file list and plan selection.
 - Hunk-based staging is deferred; `hunks` should be empty in MVP.
 
 ## Verification Rules
-- If `input.diff_hash` is present, compute a fresh hash of the staged
-  diff and compare; mismatch aborts.
+- If `input.diff_hash` is present, compute a fresh hash of the current
+  repo diff and compare; mismatch aborts.
 - Staged diff must only include files listed in the commit unit.
-- For file-level staging, staged diff must be a subset of the plan diff.
+- For file-level staging, staged diff must be a subset of the original
+  plan diff used to generate the plan.
 
 ## Execution Flow
 For each commit unit in order:
