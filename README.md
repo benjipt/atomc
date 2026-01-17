@@ -58,3 +58,8 @@ Defaults and configuration precedence are in `docs/02_cli_spec.md`.
 atomc snapshots the diff used to plan commits and verifies staged diffs
 match the plan before committing. If the working tree changes between
 planning and apply, the operation aborts to avoid unintended commits.
+
+## Log Policy
+Diff contents are redacted from logs by default. Use `--log-diff` or set
+`LOCAL_COMMIT_LOG_DIFF=true` only when you are sure the diff does not
+contain sensitive information.
