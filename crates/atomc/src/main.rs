@@ -29,6 +29,8 @@ use ulid::Ulid;
 #[cfg(test)]
 static APPLY_SHOULD_FAIL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+static LLM_HTTP_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 fn main() -> ExitCode {
     match run() {
@@ -219,14 +221,18 @@ struct ApplyRequestBody {
     dry_run: Option<bool>,
 }
 
+fn build_app(state: ServerState) -> Router {
+    Router::new()
+        .route("/v1/commit-plan", post(plan_handler))
+        .route("/v1/commit-apply", post(apply_handler))
+        .with_state(state)
+}
+
 async fn run_server(
     args: &ServeArgs,
     state: ServerState,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let app = Router::new()
-        .route("/v1/commit-plan", post(plan_handler))
-        .route("/v1/commit-apply", post(apply_handler))
-        .with_state(state);
+    let app = build_app(state);
 
     let addr = format!("{}:{}", args.host, args.port);
     let listener = TcpListener::bind(&addr).await?;
@@ -368,7 +374,7 @@ async fn apply_handler(
             expected_diff_hash: plan.input.as_ref().and_then(|input| input.diff_hash.clone()),
             cleanup_on_error,
         };
-        match git::apply_plan(request) {
+        match execute_apply_plan(request) {
             Ok(results) => results,
             Err(err) => {
                 return error_response(
@@ -492,9 +498,31 @@ async fn request_commit_plan_http(
     prompt: &llm::Prompt,
     request_id: &str,
 ) -> Result<CommitPlan, Response> {
-    llm::generate_commit_plan(config, prompt)
+    request_commit_plan_http_impl(config, prompt)
         .await
         .map_err(|err| llm_error_response(err, request_id))
+}
+
+#[cfg(not(test))]
+async fn request_commit_plan_http_impl(
+    config: &ResolvedConfig,
+    prompt: &llm::Prompt,
+) -> Result<CommitPlan, LlmError> {
+    llm::generate_commit_plan(config, prompt).await
+}
+
+#[cfg(test)]
+async fn request_commit_plan_http_impl(
+    _config: &ResolvedConfig,
+    _prompt: &llm::Prompt,
+) -> Result<CommitPlan, LlmError> {
+    use std::sync::atomic::Ordering;
+    match LLM_HTTP_MODE.load(Ordering::SeqCst) {
+        1 => Err(LlmError::Runtime("simulated runtime error".to_string())),
+        2 => Err(LlmError::Parse("simulated parse error".to_string())),
+        3 => Err(LlmError::Timeout),
+        _ => Ok(test_commit_plan()),
+    }
 }
 
 fn semantic_warnings_http(plan: &CommitPlan, request_id: &str) -> Result<Vec<Warning>, Response> {
@@ -581,6 +609,28 @@ fn status_for_error(code: ErrorCode) -> StatusCode {
         ErrorCode::LlmRuntimeError | ErrorCode::LlmParseError => StatusCode::BAD_GATEWAY,
         ErrorCode::Timeout => StatusCode::GATEWAY_TIMEOUT,
         ErrorCode::GitError | ErrorCode::ConfigError => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+#[cfg(test)]
+fn test_commit_plan() -> CommitPlan {
+    CommitPlan {
+        schema_version: SCHEMA_VERSION.to_string(),
+        request_id: None,
+        warnings: None,
+        input: None,
+        plan: vec![atomc_core::types::CommitUnit {
+            id: "commit-1".to_string(),
+            type_: atomc_core::types::CommitType::Docs,
+            scope: Some("server".to_string()),
+            summary: "document HTTP server plan and apply endpoint behavior".to_string(),
+            body: vec![
+                "Describe request and response payloads".to_string(),
+                "Note error mapping for execution failures".to_string(),
+            ],
+            files: vec!["docs/02_cli_spec.md".to_string()],
+            hunks: Vec::new(),
+        }],
     }
 }
 
@@ -1252,11 +1302,17 @@ fn git_error_details(error: GitError) -> Value {
 mod tests {
     use super::*;
     use atomc_core::config::ResolvedConfig;
+    use axum::body::Body;
+    use axum::http::{HeaderMap, Request, StatusCode};
+    use axum::Router;
+    use http_body_util::BodyExt;
+    use serde_json::Value as JsonValue;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::Ordering;
     use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tower::ServiceExt;
 
     struct EnvVarGuard {
         key: String,
@@ -1275,13 +1331,31 @@ mod tests {
     }
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    static SERVER_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     fn lock_env() -> std::sync::MutexGuard<'static, ()> {
         ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
     }
 
+    fn lock_server() -> std::sync::MutexGuard<'static, ()> {
+        SERVER_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
     fn set_apply_failure(value: bool) {
         super::APPLY_SHOULD_FAIL.store(value, Ordering::SeqCst);
+    }
+
+    fn set_llm_mode(mode: u8) {
+        super::LLM_HTTP_MODE.store(mode, Ordering::SeqCst);
+    }
+
+    async fn send_request(app: Router, request: Request<Body>) -> (StatusCode, HeaderMap, JsonValue) {
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: JsonValue = serde_json::from_slice(&body).unwrap();
+        (status, headers, json)
     }
 
     impl Drop for EnvVarGuard {
@@ -1470,6 +1544,115 @@ mod tests {
             let result = handle_apply(&cli, args);
             assert_eq!(result.unwrap_err(), ExitCode::from(6));
         }
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn plan_endpoint_returns_plan_with_metadata() {
+        let _lock = lock_server();
+        set_llm_mode(0);
+        let app = super::build_app(ServerState {
+            config: ResolvedConfig::defaults(),
+        });
+        let payload = serde_json::json!({
+            "diff": "diff --git a/file.txt b/file.txt\n"
+        });
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/commit-plan")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+
+        let (status, _headers, json) = send_request(app, request).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["schema_version"], "v1");
+        assert_eq!(json["input"]["source"], "diff");
+        assert!(json["input"]["diff_hash"].as_str().unwrap().starts_with("sha256:"));
+        assert_eq!(json["plan"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn plan_endpoint_propagates_request_id() {
+        let _lock = lock_server();
+        set_llm_mode(0);
+        let app = super::build_app(ServerState {
+            config: ResolvedConfig::defaults(),
+        });
+        let payload = serde_json::json!({
+            "diff": "diff --git a/file.txt b/file.txt\n"
+        });
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/commit-plan")
+            .header("content-type", "application/json")
+            .header("x-request-id", "req-123")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+
+        let (status, headers, json) = send_request(app, request).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers.get("x-request-id").unwrap(), "req-123");
+        assert_eq!(json["request_id"], "req-123");
+    }
+
+    #[tokio::test]
+    async fn plan_endpoint_maps_llm_errors() {
+        let _lock = lock_server();
+        let cases = [
+            (1u8, StatusCode::BAD_GATEWAY, "llm_runtime_error"),
+            (2u8, StatusCode::BAD_GATEWAY, "llm_parse_error"),
+            (3u8, StatusCode::GATEWAY_TIMEOUT, "timeout"),
+        ];
+
+        for (mode, status, code) in cases {
+            set_llm_mode(mode);
+            let app = super::build_app(ServerState {
+                config: ResolvedConfig::defaults(),
+            });
+            let payload = serde_json::json!({
+                "diff": "diff --git a/file.txt b/file.txt\n"
+            });
+            let request = Request::builder()
+                .method("POST")
+                .uri("/v1/commit-plan")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap();
+
+            let (actual_status, _headers, json) = send_request(app, request).await;
+            assert_eq!(actual_status, status);
+            assert_eq!(json["error"]["code"], code);
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_endpoint_maps_git_error_on_execute() {
+        let _lock = lock_server();
+        set_llm_mode(0);
+        set_apply_failure(true);
+        let dir = temp_dir("server-apply");
+        fs::create_dir_all(&dir).unwrap();
+
+        let app = super::build_app(ServerState {
+            config: ResolvedConfig::defaults(),
+        });
+        let payload = serde_json::json!({
+            "repo_path": dir,
+            "diff": "diff --git a/file.txt b/file.txt\n",
+            "execute": true
+        });
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/commit-apply")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+
+        let (status, _headers, json) = send_request(app, request).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(json["error"]["code"], "git_error");
 
         fs::remove_dir_all(&dir).ok();
     }
