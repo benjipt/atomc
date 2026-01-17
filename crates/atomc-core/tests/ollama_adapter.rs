@@ -105,6 +105,14 @@ async fn ollama_client_parses_commit_plan() {
     assert_eq!(payload["prompt"], "user prompt");
     assert_eq!(payload["system"], "system prompt");
     assert_eq!(payload["stream"], false);
+    assert_eq!(
+        payload["format"]["$schema"],
+        json!("https://json-schema.org/draft/2020-12/schema")
+    );
+    assert_eq!(
+        payload["format"]["$id"],
+        json!("https://atomc.dev/schema/v1/commit-plan.json")
+    );
     assert_eq!(payload["options"]["temperature"], json!(0.2));
     assert_eq!(payload["options"]["num_predict"], json!(128));
 

@@ -4,6 +4,7 @@ use crate::types::CommitPlan;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing::debug;
 use std::path::Path;
 use std::time::Duration;
 
@@ -116,6 +117,7 @@ impl OllamaClient {
             prompt: &prompt.user,
             system: &prompt.system,
             stream: false,
+            format: COMMIT_PLAN_SCHEMA_JSON.clone(),
             options: OllamaOptions {
                 temperature: options.temperature,
                 num_predict: options.max_tokens,
@@ -251,10 +253,35 @@ pub async fn generate_commit_plan(
 }
 
 fn parse_commit_plan(payload: &str) -> Result<CommitPlan, LlmError> {
-    let value: Value = serde_json::from_str(payload.trim())
-        .map_err(|err| LlmError::Parse(err.to_string()))?;
-    schema::validate_schema(SchemaKind::CommitPlan, &value)
-        .map_err(|err| LlmError::Parse(err.to_string()))?;
+    let payload = payload.trim();
+    if payload.is_empty() {
+        debug!("llm response payload is empty");
+        return Err(LlmError::Parse("empty response payload".to_string()));
+    }
+    let value: Value = serde_json::from_str(payload).map_err(|err| {
+        let preview: String = payload.chars().take(200).collect();
+        debug!(
+            error = %err,
+            payload_len = payload.len(),
+            payload_preview = %preview,
+            "llm response payload is not valid json"
+        );
+        LlmError::Parse(err.to_string())
+    })?;
+    if let Err(err) = schema::validate_schema(SchemaKind::CommitPlan, &value) {
+        let preview: String = payload.chars().take(200).collect();
+        let keys = value
+            .as_object()
+            .map(|object| object.keys().cloned().collect::<Vec<_>>());
+        debug!(
+            error = %err,
+            payload_len = payload.len(),
+            payload_preview = %preview,
+            top_level_keys = ?keys,
+            "llm response failed schema validation"
+        );
+        return Err(LlmError::Parse(err.to_string()));
+    }
     let plan: CommitPlan = serde_json::from_value(value)
         .map_err(|err| LlmError::Parse(err.to_string()))?;
     if plan.plan.is_empty() {
@@ -291,6 +318,7 @@ struct OllamaGenerateRequest<'a> {
     prompt: &'a str,
     system: &'a str,
     stream: bool,
+    format: Value,
     options: OllamaOptions,
 }
 
@@ -322,9 +350,32 @@ struct LlamaCppMessage<'a> {
 }
 
 static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
+static COMMIT_PLAN_SCHEMA_JSON: Lazy<Value> = Lazy::new(|| {
+    serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../schemas/v1/commit-plan.json"
+    )))
+    .expect("commit plan schema json")
+});
 
 const SYSTEM_PROMPT: &str = "You are a local commit planning assistant.\n\
 Return a single JSON object that matches the CommitPlan schema.\n\
+The top-level object must include:\n\
+{\n\
+  \"schema_version\": \"v1\",\n\
+  \"plan\": [ { ...commit units... } ]\n\
+}\n\
+Do not use alternate keys like \"commits\".\n\
+Each commit unit must include:\n\
+- id: non-empty unique string (e.g., \"commit-1\")\n\
+- type: one of the allowed conventional commit types\n\
+- scope: non-empty kebab-case string (lowercase letters, digits, hyphens only; e.g. \"cli-tests\"),\n\
+  or null only for truly global changes\n\
+- summary: 50-72 characters\n\
+- body: 1-3 non-empty lines (no leading hyphens)\n\
+- files: non-empty array\n\
+- hunks: empty array (no patch text in MVP)\n\
+Do not include diff text, patch lines, or file content inside any fields.\n\
 Do not include Markdown, comments, or any extra text.\n\
 Follow atomic commit rules:\n\
 - Each commit must do exactly one thing.\n\
