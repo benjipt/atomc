@@ -252,7 +252,7 @@ Fields:
           ]
         },
         "scope": {"type": ["string", "null"]},
-        "summary": {"type": "string", "minLength": 1, "maxLength": 72},
+        "summary": {"type": "string", "minLength": 50, "maxLength": 72},
         "body": {
           "type": "array",
           "minItems": 1,
@@ -354,7 +354,7 @@ Fields:
           ]
         },
         "scope": {"type": ["string", "null"]},
-        "summary": {"type": "string", "minLength": 1, "maxLength": 72},
+        "summary": {"type": "string", "minLength": 50, "maxLength": 72},
         "body": {
           "type": "array",
           "minItems": 1,

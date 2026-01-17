@@ -138,8 +138,8 @@ Behavior:
 - Without `--execute`, the command produces a plan and reports
   intended actions without modifying the repo.
 - With `--execute`, commits are created in plan order.
-- If a repo-derived diff is used, atomc snapshots the diff and aborts
-  if the worktree changes or staged diff does not match the plan.
+- atomc snapshots the diff and aborts if the worktree changes or the
+  staged diff does not match the plan (regardless of diff source).
 
 ### `serve`
 Run a local HTTP server for repeated requests.

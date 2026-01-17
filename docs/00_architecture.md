@@ -128,10 +128,16 @@ Response:
 ```json
 {
   "repo_path": "/path/to/repo",
-  "plan": [ /* same as above */ ],
+  "diff": "<optional git diff text>",
+  "diff_mode": "all",
+  "include_untracked": true,
+  "plan": [ /* optional; same as above */ ],
   "execute": true
 }
 ```
+If `plan` is omitted, the server computes a plan from `diff` or the repo.
+If `diff` is also omitted, the server computes the diff from the repo
+using `diff_mode` and `include_untracked`.
 
 ## Commit Message Rules
 - Conventional commits: `type[scope]: summary`
