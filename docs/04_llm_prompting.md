@@ -1,8 +1,9 @@
 # LLM Prompting Specification
 
 This document defines the prompt contract used to produce atomic commit
-plans from a diff. It is designed for local LLMs (Ollama by default) and
-prioritizes determinism, safety, and strict JSON output.
+plans from a diff. It is designed for local LLMs (Ollama by default, with
+llama.cpp optional) and prioritizes determinism, safety, and strict JSON
+output.
 
 ## Goals
 - Produce a valid `CommitPlan` JSON object every time.
@@ -156,3 +157,9 @@ If the model output fails JSON validation:
 - Re-run with a stricter system prompt that repeats "JSON only".
 - Lower temperature or increase max tokens if the output is truncated.
 - Do not attempt to auto-correct non-JSON prose; reject and retry.
+
+## Runtime Notes
+Ollama uses `/api/generate` and expects the system/user prompts above.
+llama.cpp is expected to expose an OpenAI-compatible
+`/v1/chat/completions` endpoint. The adapter sends the system prompt as a
+`system` message and the user prompt as a `user` message.

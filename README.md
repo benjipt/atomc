@@ -45,6 +45,14 @@ Default config path (macOS):
 
 Defaults and configuration precedence are in `docs/02_cli_spec.md`.
 
+### Runtime Notes
+Ollama is the default runtime. To use llama.cpp, point the base URL at a
+compatible server (OpenAI-style `/v1/chat/completions`) and set:
+```
+LOCAL_COMMIT_RUNTIME=llama.cpp
+LOCAL_COMMIT_OLLAMA_URL=http://localhost:8080
+```
+
 ## Docs
 - `docs/00_architecture.md` — architecture and API contract
 - `docs/01_commit_strategy.md` — atomic commit rules
