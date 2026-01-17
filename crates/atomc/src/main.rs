@@ -10,12 +10,20 @@ use atomc_core::types::{
     ErrorDetail, ErrorResponse, InputMeta, InputSource, Warning,
 };
 use atomc_core::SCHEMA_VERSION;
+use axum::extract::State;
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::post;
+use axum::Json;
+use axum::Router;
 use clap::Parser;
-use cli::{ApplyArgs, Cli, Commands, OutputFormat, PlanArgs};
+use cli::{ApplyArgs, Cli, Commands, OutputFormat, PlanArgs, ServeArgs};
+use serde::Deserialize;
 use serde_json::Value;
-use std::process::ExitCode;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+use tokio::net::TcpListener;
 use ulid::Ulid;
 
 #[cfg(test)]
@@ -34,10 +42,7 @@ fn run() -> Result<(), ExitCode> {
     match cli.command {
         Commands::Plan(ref args) => handle_plan(&cli, args),
         Commands::Apply(ref args) => handle_apply(&cli, args),
-        Commands::Serve(_) => {
-            eprintln!("atomc: command handling not yet implemented");
-            Err(ExitCode::from(2))
-        }
+        Commands::Serve(ref args) => handle_serve(&cli, args),
     }
 }
 
@@ -157,6 +162,426 @@ fn handle_apply(cli: &Cli, args: &ApplyArgs) -> Result<(), ExitCode> {
     let response = build_apply_response(plan, results, source, &config, &diff);
 
     emit_apply(args.format, &response)
+}
+
+fn handle_serve(cli: &Cli, args: &ServeArgs) -> Result<(), ExitCode> {
+    let overrides = PartialConfig {
+        model: args.model.clone(),
+        llm_timeout_secs: Some(args.request_timeout),
+        ..PartialConfig::default()
+    };
+    let config = resolve_config(cli, overrides, OutputFormat::Human)?;
+    let state = ServerState { config };
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| {
+            eprintln!("atomc: failed to start runtime: {err}");
+            ExitCode::from(2)
+        })?;
+
+    runtime
+        .block_on(run_server(args, state))
+        .map_err(|err| {
+            eprintln!("atomc: server error: {err}");
+            ExitCode::from(2)
+        })
+}
+
+#[derive(Clone)]
+struct ServerState {
+    config: ResolvedConfig,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct PlanRequest {
+    repo_path: Option<PathBuf>,
+    diff: Option<String>,
+    diff_mode: Option<config::DiffMode>,
+    include_untracked: Option<bool>,
+    git_status: Option<String>,
+    model: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct ApplyRequestBody {
+    repo_path: PathBuf,
+    diff: Option<String>,
+    diff_mode: Option<config::DiffMode>,
+    include_untracked: Option<bool>,
+    git_status: Option<String>,
+    model: Option<String>,
+    execute: Option<bool>,
+    cleanup_on_error: Option<bool>,
+    dry_run: Option<bool>,
+}
+
+async fn run_server(
+    args: &ServeArgs,
+    state: ServerState,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let app = Router::new()
+        .route("/v1/commit-plan", post(plan_handler))
+        .route("/v1/commit-apply", post(apply_handler))
+        .with_state(state);
+
+    let addr = format!("{}:{}", args.host, args.port);
+    let listener = TcpListener::bind(&addr).await?;
+    println!("atomc: server listening on http://{addr}");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    Ok(())
+}
+
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+}
+
+async fn plan_handler(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    Json(payload): Json<PlanRequest>,
+) -> Response {
+    let request_id = extract_request_id(&headers);
+    let config = config_with_request_overrides(
+        &state.config,
+        payload.model.clone(),
+        payload.diff_mode,
+        payload.include_untracked,
+    );
+
+    let repo_path = payload.repo_path.as_deref();
+    if let Some(path) = repo_path {
+        if let Err(response) = validate_repo_path_http(path, &request_id) {
+            return response;
+        }
+    }
+
+    let (diff, source) = match resolve_request_diff(
+        repo_path,
+        payload.diff,
+        &config,
+        &request_id,
+    ) {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
+
+    if let Err(response) = validate_diff_size(&diff, config.max_diff_bytes, &request_id) {
+        return response;
+    }
+
+    let prompt = llm::build_prompt(PromptContext {
+        repo_path,
+        diff_mode: input_diff_mode(&source, config.diff_mode),
+        include_untracked: input_include_untracked(&source, config.include_untracked),
+        git_status: payload.git_status.as_deref(),
+        diff: &diff,
+    });
+
+    let mut plan = match request_commit_plan_http(&config, &prompt, &request_id).await {
+        Ok(plan) => plan,
+        Err(response) => return response,
+    };
+    let warnings = match semantic_warnings_http(&plan, &request_id) {
+        Ok(warnings) => warnings,
+        Err(response) => return response,
+    };
+
+    plan.schema_version = SCHEMA_VERSION.to_string();
+    plan.request_id = Some(request_id.clone());
+    plan.input = Some(build_input_meta(source, &config, &diff));
+    plan.warnings = merge_warnings(plan.warnings.take(), warnings);
+
+    json_response(StatusCode::OK, &request_id, plan)
+}
+
+async fn apply_handler(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    Json(payload): Json<ApplyRequestBody>,
+) -> Response {
+    let request_id = extract_request_id(&headers);
+    let config = config_with_request_overrides(
+        &state.config,
+        payload.model.clone(),
+        payload.diff_mode,
+        payload.include_untracked,
+    );
+
+    if let Err(response) = validate_repo_path_http(&payload.repo_path, &request_id) {
+        return response;
+    }
+
+    let (diff, source) = match resolve_request_diff(
+        Some(payload.repo_path.as_path()),
+        payload.diff,
+        &config,
+        &request_id,
+    ) {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
+
+    if let Err(response) = validate_diff_size(&diff, config.max_diff_bytes, &request_id) {
+        return response;
+    }
+
+    let prompt = llm::build_prompt(PromptContext {
+        repo_path: Some(payload.repo_path.as_path()),
+        diff_mode: input_diff_mode(&source, config.diff_mode),
+        include_untracked: input_include_untracked(&source, config.include_untracked),
+        git_status: payload.git_status.as_deref(),
+        diff: &diff,
+    });
+
+    let mut plan = match request_commit_plan_http(&config, &prompt, &request_id).await {
+        Ok(plan) => plan,
+        Err(response) => return response,
+    };
+    let warnings = match semantic_warnings_http(&plan, &request_id) {
+        Ok(warnings) => warnings,
+        Err(response) => return response,
+    };
+
+    plan.schema_version = SCHEMA_VERSION.to_string();
+    plan.request_id = Some(request_id.clone());
+    plan.input = Some(build_input_meta(source.clone(), &config, &diff));
+    plan.warnings = merge_warnings(plan.warnings.take(), warnings);
+
+    let execute = payload.execute.unwrap_or(false);
+    let dry_run = payload.dry_run.unwrap_or(false);
+    let should_execute = execute && !dry_run;
+    let cleanup_on_error = payload.cleanup_on_error.unwrap_or(false);
+
+    let results = if should_execute {
+        let request = git::ApplyRequest {
+            repo: payload.repo_path.as_path(),
+            plan: &plan.plan,
+            diff: &diff,
+            diff_mode: config.diff_mode,
+            include_untracked: config.include_untracked,
+            expected_diff_hash: plan.input.as_ref().and_then(|input| input.diff_hash.clone()),
+            cleanup_on_error,
+        };
+        match git::apply_plan(request) {
+            Ok(results) => results,
+            Err(err) => {
+                return error_response(
+                    ErrorCode::GitError,
+                    "apply execution failed",
+                    Some(git_error_details(err)),
+                    &request_id,
+                )
+            }
+        }
+    } else {
+        planned_results(&plan)
+    };
+
+    let response = build_apply_response(plan, results, source, &config, &diff);
+    json_response(StatusCode::OK, &request_id, response)
+}
+
+fn config_with_request_overrides(
+    base: &ResolvedConfig,
+    model: Option<String>,
+    diff_mode: Option<config::DiffMode>,
+    include_untracked: Option<bool>,
+) -> ResolvedConfig {
+    let mut config = base.clone();
+    if let Some(model) = model {
+        config.model = model;
+    }
+    if let Some(diff_mode) = diff_mode {
+        config.diff_mode = diff_mode;
+    }
+    if let Some(include_untracked) = include_untracked {
+        config.include_untracked = include_untracked;
+    }
+    config
+}
+
+fn resolve_request_diff(
+    repo_path: Option<&Path>,
+    diff: Option<String>,
+    config: &ResolvedConfig,
+    request_id: &str,
+) -> Result<(String, InputSource), Response> {
+    if let Some(diff) = diff {
+        if diff.is_empty() {
+            return Err(error_response(
+                ErrorCode::InputInvalid,
+                "diff input is empty",
+                None,
+                request_id,
+            ));
+        }
+        return Ok((diff, InputSource::Diff));
+    }
+
+    let repo = repo_path.ok_or_else(|| {
+        error_response(
+            ErrorCode::InputInvalid,
+            "no diff provided and no repo path supplied",
+            None,
+            request_id,
+        )
+    })?;
+
+    let diff = git::compute_diff(repo, config.diff_mode, config.include_untracked).map_err(|err| {
+        error_response(
+            ErrorCode::GitError,
+            "failed to compute git diff",
+            Some(git_error_details(err)),
+            request_id,
+        )
+    })?;
+
+    if diff.is_empty() {
+        return Err(error_response(
+            ErrorCode::InputInvalid,
+            "diff input is empty",
+            None,
+            request_id,
+        ));
+    }
+
+    Ok((diff, InputSource::Repo))
+}
+
+fn validate_repo_path_http(path: &Path, request_id: &str) -> Result<(), Response> {
+    if !path.exists() {
+        return Err(error_response(
+            ErrorCode::InputInvalid,
+            "repo path does not exist",
+            Some(serde_json::json!({ "path": path.display().to_string() })),
+            request_id,
+        ));
+    }
+    if !path.is_dir() {
+        return Err(error_response(
+            ErrorCode::InputInvalid,
+            "repo path is not a directory",
+            Some(serde_json::json!({ "path": path.display().to_string() })),
+            request_id,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_diff_size(diff: &str, max_bytes: u64, request_id: &str) -> Result<(), Response> {
+    let max_bytes_usize = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+    if diff.as_bytes().len() > max_bytes_usize {
+        return Err(error_response(
+            ErrorCode::InputInvalid,
+            "diff exceeds max_diff_bytes",
+            Some(serde_json::json!({ "max_diff_bytes": max_bytes })),
+            request_id,
+        ));
+    }
+    Ok(())
+}
+
+async fn request_commit_plan_http(
+    config: &ResolvedConfig,
+    prompt: &llm::Prompt,
+    request_id: &str,
+) -> Result<CommitPlan, Response> {
+    llm::generate_commit_plan(config, prompt)
+        .await
+        .map_err(|err| llm_error_response(err, request_id))
+}
+
+fn semantic_warnings_http(plan: &CommitPlan, request_id: &str) -> Result<Vec<Warning>, Response> {
+    match semantic::validate_commit_units(&plan.plan, ScopePolicy::Warn) {
+        Ok(report) => Ok(semantic_warnings_to_warnings(&report.warnings)),
+        Err(errors) => {
+            let details = serde_json::json!({
+                "errors": errors.iter().map(|err| err.to_string()).collect::<Vec<_>>()
+            });
+            Err(error_response(
+                ErrorCode::LlmParseError,
+                "semantic validation failed",
+                Some(details),
+                request_id,
+            ))
+        }
+    }
+}
+
+fn llm_error_response(error: LlmError, request_id: &str) -> Response {
+    match error {
+        LlmError::Runtime(message) => error_response(
+            ErrorCode::LlmRuntimeError,
+            "llm request failed",
+            Some(serde_json::json!({ "error": message })),
+            request_id,
+        ),
+        LlmError::Parse(message) => error_response(
+            ErrorCode::LlmParseError,
+            "llm response parse failed",
+            Some(serde_json::json!({ "error": message })),
+            request_id,
+        ),
+        LlmError::Timeout => {
+            error_response(ErrorCode::Timeout, "llm request timed out", None, request_id)
+        }
+        LlmError::UnsupportedRuntime(runtime) => error_response(
+            ErrorCode::ConfigError,
+            "unsupported llm runtime",
+            Some(serde_json::json!({ "runtime": runtime })),
+            request_id,
+        ),
+    }
+}
+
+fn extract_request_id(headers: &HeaderMap) -> String {
+    headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| value.to_string())
+        .unwrap_or_else(request_id)
+}
+
+fn json_response<T: serde::Serialize>(status: StatusCode, request_id: &str, payload: T) -> Response {
+    let mut headers = HeaderMap::new();
+    let header_value = HeaderValue::from_str(request_id)
+        .unwrap_or_else(|_| HeaderValue::from_static("invalid-request-id"));
+    headers.insert("x-request-id", header_value);
+    (status, headers, Json(payload)).into_response()
+}
+
+fn error_response(
+    code: ErrorCode,
+    message: &str,
+    details: Option<Value>,
+    request_id: &str,
+) -> Response {
+    let response = ErrorResponse {
+        schema_version: SCHEMA_VERSION.to_string(),
+        request_id: Some(request_id.to_string()),
+        error: ErrorDetail {
+            code: code.as_str().to_string(),
+            message: message.to_string(),
+            details,
+        },
+    };
+    json_response(status_for_error(code), request_id, response)
+}
+
+fn status_for_error(code: ErrorCode) -> StatusCode {
+    match code {
+        ErrorCode::UsageError | ErrorCode::InputInvalid => StatusCode::BAD_REQUEST,
+        ErrorCode::LlmRuntimeError | ErrorCode::LlmParseError => StatusCode::BAD_GATEWAY,
+        ErrorCode::Timeout => StatusCode::GATEWAY_TIMEOUT,
+        ErrorCode::GitError | ErrorCode::ConfigError => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 fn resolve_config(
