@@ -17,13 +17,15 @@ use axum::routing::post;
 use axum::Json;
 use axum::Router;
 use clap::Parser;
-use cli::{ApplyArgs, Cli, Commands, OutputFormat, PlanArgs, ServeArgs};
+use cli::{ApplyArgs, Cli, Commands, LogFormat, OutputFormat, PlanArgs, ServeArgs};
 use serde::Deserialize;
 use serde_json::Value;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use tokio::net::TcpListener;
+use tracing::{error, info, warn};
+use tracing_subscriber::filter::LevelFilter;
 use ulid::Ulid;
 
 #[cfg(test)]
@@ -41,6 +43,11 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), ExitCode> {
     let cli = Cli::parse();
+    let log_format = match cli.command {
+        Commands::Serve(ref args) => args.log_format,
+        _ => LogFormat::Text,
+    };
+    init_logging(cli.log_level, log_format, cli.no_color, cli.quiet);
     match cli.command {
         Commands::Plan(ref args) => handle_plan(&cli, args),
         Commands::Apply(ref args) => handle_apply(&cli, args),
@@ -79,6 +86,14 @@ fn handle_plan(cli: &Cli, args: &PlanArgs) -> Result<(), ExitCode> {
         )
     })?;
 
+    let request_id = request_id();
+    info!(
+        request_id = %request_id,
+        source = input_source_str(&source),
+        diff_bytes = diff.len(),
+        "plan request start"
+    );
+
     let prompt = llm::build_prompt(PromptContext {
         repo_path: args.repo.as_deref(),
         diff_mode: input_diff_mode(&source, config.diff_mode),
@@ -90,9 +105,15 @@ fn handle_plan(cli: &Cli, args: &PlanArgs) -> Result<(), ExitCode> {
     let mut plan = request_commit_plan(&config, &prompt, args.format)?;
     let warnings = apply_semantic_validation(&plan, args.format)?;
     plan.schema_version = SCHEMA_VERSION.to_string();
-    plan.request_id = Some(request_id());
+    plan.request_id = Some(request_id.clone());
     plan.input = Some(build_input_meta(source.clone(), &config, &diff));
     plan.warnings = merge_warnings(plan.warnings.take(), warnings);
+
+    info!(
+        request_id = %request_id,
+        commits = plan.plan.len(),
+        "plan request complete"
+    );
 
     emit_plan(args.format, &plan)
 }
@@ -124,6 +145,15 @@ fn handle_apply(cli: &Cli, args: &ApplyArgs) -> Result<(), ExitCode> {
         )
     })?;
 
+    let request_id = request_id();
+    info!(
+        request_id = %request_id,
+        source = input_source_str(&source),
+        diff_bytes = diff.len(),
+        execute = args.execute,
+        "apply request start"
+    );
+
     let prompt = llm::build_prompt(PromptContext {
         repo_path: Some(args.repo.as_path()),
         diff_mode: input_diff_mode(&source, config.diff_mode),
@@ -135,7 +165,7 @@ fn handle_apply(cli: &Cli, args: &ApplyArgs) -> Result<(), ExitCode> {
     let mut plan = request_commit_plan(&config, &prompt, args.format)?;
     let warnings = apply_semantic_validation(&plan, args.format)?;
     plan.schema_version = SCHEMA_VERSION.to_string();
-    plan.request_id = Some(request_id());
+    plan.request_id = Some(request_id.clone());
     plan.input = Some(build_input_meta(source.clone(), &config, &diff));
     plan.warnings = merge_warnings(plan.warnings.take(), warnings.clone());
 
@@ -162,6 +192,12 @@ fn handle_apply(cli: &Cli, args: &ApplyArgs) -> Result<(), ExitCode> {
     };
 
     let response = build_apply_response(plan, results, source, &config, &diff);
+
+    info!(
+        request_id = %request_id,
+        results = response.results.len(),
+        "apply request complete"
+    );
 
     emit_apply(args.format, &response)
 }
@@ -236,7 +272,7 @@ async fn run_server(
 
     let addr = format!("{}:{}", args.host, args.port);
     let listener = TcpListener::bind(&addr).await?;
-    println!("atomc: server listening on http://{addr}");
+    info!("server listening on http://{addr}");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
@@ -253,6 +289,7 @@ async fn plan_handler(
     Json(payload): Json<PlanRequest>,
 ) -> Response {
     let request_id = extract_request_id(&headers);
+    info!(request_id = %request_id, "plan request received");
     let config = config_with_request_overrides(
         &state.config,
         payload.model.clone(),
@@ -276,6 +313,12 @@ async fn plan_handler(
         Ok(result) => result,
         Err(response) => return response,
     };
+    info!(
+        request_id = %request_id,
+        source = input_source_str(&source),
+        diff_bytes = diff.len(),
+        "plan request prepared"
+    );
 
     if let Err(response) = validate_diff_size(&diff, config.max_diff_bytes, &request_id) {
         return response;
@@ -303,6 +346,11 @@ async fn plan_handler(
     plan.input = Some(build_input_meta(source, &config, &diff));
     plan.warnings = merge_warnings(plan.warnings.take(), warnings);
 
+    info!(
+        request_id = %request_id,
+        commits = plan.plan.len(),
+        "plan request complete"
+    );
     json_response(StatusCode::OK, &request_id, plan)
 }
 
@@ -312,6 +360,7 @@ async fn apply_handler(
     Json(payload): Json<ApplyRequestBody>,
 ) -> Response {
     let request_id = extract_request_id(&headers);
+    info!(request_id = %request_id, "apply request received");
     let config = config_with_request_overrides(
         &state.config,
         payload.model.clone(),
@@ -332,6 +381,12 @@ async fn apply_handler(
         Ok(result) => result,
         Err(response) => return response,
     };
+    info!(
+        request_id = %request_id,
+        source = input_source_str(&source),
+        diff_bytes = diff.len(),
+        "apply request prepared"
+    );
 
     if let Err(response) = validate_diff_size(&diff, config.max_diff_bytes, &request_id) {
         return response;
@@ -390,6 +445,12 @@ async fn apply_handler(
     };
 
     let response = build_apply_response(plan, results, source, &config, &diff);
+    info!(
+        request_id = %request_id,
+        results = response.results.len(),
+        execute = should_execute,
+        "apply request complete"
+    );
     json_response(StatusCode::OK, &request_id, response)
 }
 
@@ -591,6 +652,12 @@ fn error_response(
     details: Option<Value>,
     request_id: &str,
 ) -> Response {
+    warn!(
+        request_id = %request_id,
+        code = code.as_str(),
+        message,
+        "request failed"
+    );
     let response = ErrorResponse {
         schema_version: SCHEMA_VERSION.to_string(),
         request_id: Some(request_id.to_string()),
@@ -1112,11 +1179,18 @@ impl ErrorCode {
 }
 
 fn emit_error(format: OutputFormat, code: ErrorCode, message: &str, details: Option<Value>) -> ExitCode {
+    let request_id = request_id();
+    error!(
+        request_id = %request_id,
+        code = code.as_str(),
+        message,
+        "command failed"
+    );
     match format {
         OutputFormat::Json => {
             let response = ErrorResponse {
                 schema_version: SCHEMA_VERSION.to_string(),
-                request_id: Some(request_id()),
+                request_id: Some(request_id),
                 error: ErrorDetail {
                     code: code.as_str().to_string(),
                     message: message.to_string(),
@@ -1138,6 +1212,38 @@ fn emit_error(format: OutputFormat, code: ErrorCode, message: &str, details: Opt
         }
     }
     code.exit_code()
+}
+
+fn init_logging(level: cli::LogLevel, format: LogFormat, no_color: bool, quiet: bool) {
+    let level = if quiet {
+        LevelFilter::ERROR
+    } else {
+        match level {
+            cli::LogLevel::Trace => LevelFilter::TRACE,
+            cli::LogLevel::Debug => LevelFilter::DEBUG,
+            cli::LogLevel::Info => LevelFilter::INFO,
+            cli::LogLevel::Warn => LevelFilter::WARN,
+            cli::LogLevel::Error => LevelFilter::ERROR,
+        }
+    };
+
+    let builder = tracing_subscriber::fmt()
+        .with_max_level(level)
+        .with_writer(std::io::stderr);
+
+    let result = match format {
+        LogFormat::Json => builder.json().with_ansi(false).try_init(),
+        LogFormat::Text => builder.with_ansi(!no_color).try_init(),
+    };
+
+    let _ = result;
+}
+
+fn input_source_str(source: &InputSource) -> &'static str {
+    match source {
+        InputSource::Repo => "repo",
+        InputSource::Diff => "diff",
+    }
 }
 
 fn emit_plan(format: OutputFormat, plan: &CommitPlan) -> Result<(), ExitCode> {

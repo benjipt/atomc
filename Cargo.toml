@@ -20,6 +20,6 @@ reqwest = { version = "0.12.7", default-features = false, features = ["json", "r
 tokio = { version = "1.39.3", features = ["rt-multi-thread", "macros", "time", "fs", "signal"] }
 once_cell = "1.21.3"
 tracing = "0.1.40"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 toml = "0.8.19"
 directories = "5.0.1"
