@@ -2,7 +2,13 @@ mod cli;
 
 use atomc_core::config::{self, ConfigError, PartialConfig, ResolvedConfig};
 use atomc_core::git::GitError;
-use atomc_core::types::{ErrorDetail, ErrorResponse};
+use atomc_core::hash;
+use atomc_core::llm::{self, LlmError, PromptContext};
+use atomc_core::semantic::{self, ScopePolicy, SemanticWarning};
+use atomc_core::types::{
+    CommitPlan, DiffMode as OutputDiffMode, ErrorDetail, ErrorResponse, InputMeta, InputSource,
+    Warning,
+};
 use atomc_core::SCHEMA_VERSION;
 use clap::Parser;
 use cli::{ApplyArgs, Cli, Commands, OutputFormat, PlanArgs};
@@ -44,19 +50,40 @@ fn handle_plan(cli: &Cli, args: &PlanArgs) -> Result<(), ExitCode> {
     }
 
     let mut diff = resolve_diff_input(args.diff_file.clone(), config.max_diff_bytes, args.format)?;
+    let mut source = InputSource::Diff;
     if diff.is_none() {
         if let Some(repo) = args.repo.as_deref() {
             diff = Some(compute_repo_diff(repo, &config, args.format)?);
+            source = InputSource::Repo;
         }
     }
     validate_diff_requirements(&diff, args.repo.as_deref(), &config, args.format)?;
 
-    Err(emit_error(
-        args.format,
-        ErrorCode::UsageError,
-        "command handling not yet implemented",
-        None,
-    ))
+    let diff = diff.ok_or_else(|| {
+        emit_error(
+            args.format,
+            ErrorCode::InputInvalid,
+            "diff input is missing",
+            None,
+        )
+    })?;
+
+    let prompt = llm::build_prompt(PromptContext {
+        repo_path: args.repo.as_deref(),
+        diff_mode: input_diff_mode(&source, config.diff_mode),
+        include_untracked: input_include_untracked(&source, config.include_untracked),
+        git_status: None,
+        diff: &diff,
+    });
+
+    let mut plan = request_commit_plan(&config, &prompt, args.format)?;
+    let warnings = apply_semantic_validation(&plan, args.format)?;
+    plan.schema_version = SCHEMA_VERSION.to_string();
+    plan.request_id = Some(request_id());
+    plan.input = Some(build_input_meta(source.clone(), &config, &diff));
+    plan.warnings = merge_warnings(plan.warnings.take(), warnings);
+
+    emit_plan(args.format, &plan)
 }
 
 fn handle_apply(cli: &Cli, args: &ApplyArgs) -> Result<(), ExitCode> {
@@ -127,6 +154,28 @@ fn map_diff_mode(value: cli::DiffMode) -> config::DiffMode {
     }
 }
 
+fn input_diff_mode(source: &InputSource, mode: config::DiffMode) -> Option<config::DiffMode> {
+    match source {
+        InputSource::Repo => Some(mode),
+        InputSource::Diff => None,
+    }
+}
+
+fn input_include_untracked(source: &InputSource, include_untracked: bool) -> Option<bool> {
+    match source {
+        InputSource::Repo => Some(include_untracked),
+        InputSource::Diff => None,
+    }
+}
+
+fn output_diff_mode(mode: config::DiffMode) -> OutputDiffMode {
+    match mode {
+        config::DiffMode::Worktree => OutputDiffMode::Worktree,
+        config::DiffMode::Staged => OutputDiffMode::Staged,
+        config::DiffMode::All => OutputDiffMode::All,
+    }
+}
+
 fn validate_repo_path(path: &Path, format: OutputFormat) -> Result<(), ExitCode> {
     if !path.exists() {
         return Err(emit_error(
@@ -183,6 +232,63 @@ fn validate_diff_requirements(
     }
 
     Ok(())
+}
+
+fn build_input_meta(source: InputSource, config: &ResolvedConfig, diff: &str) -> InputMeta {
+    let (diff_mode, include_untracked) = match source {
+        InputSource::Repo => (
+            Some(output_diff_mode(config.diff_mode)),
+            Some(config.include_untracked),
+        ),
+        InputSource::Diff => (None, None),
+    };
+
+    InputMeta {
+        source,
+        diff_mode,
+        include_untracked,
+        diff_hash: Some(hash::diff_hash(diff)),
+    }
+}
+
+fn apply_semantic_validation(plan: &CommitPlan, format: OutputFormat) -> Result<Vec<Warning>, ExitCode> {
+    match semantic::validate_commit_units(&plan.plan, ScopePolicy::Warn) {
+        Ok(report) => Ok(semantic_warnings_to_warnings(&report.warnings)),
+        Err(errors) => {
+            let details = serde_json::json!({
+                "errors": errors.iter().map(|err| err.to_string()).collect::<Vec<_>>()
+            });
+            Err(emit_error(
+                format,
+                ErrorCode::LlmParseError,
+                "semantic validation failed",
+                Some(details),
+            ))
+        }
+    }
+}
+
+fn semantic_warnings_to_warnings(warnings: &[SemanticWarning]) -> Vec<Warning> {
+    warnings
+        .iter()
+        .map(|warning| match warning {
+            SemanticWarning::ScopeMissing { id } => Warning {
+                code: "scope_missing".to_string(),
+                message: format!("commit {id} scope is missing"),
+                details: None,
+            },
+        })
+        .collect()
+}
+
+fn merge_warnings(existing: Option<Vec<Warning>>, new: Vec<Warning>) -> Option<Vec<Warning>> {
+    let mut combined = existing.unwrap_or_default();
+    combined.extend(new);
+    if combined.is_empty() {
+        None
+    } else {
+        Some(combined)
+    }
 }
 
 fn resolve_diff_input(
@@ -301,6 +407,80 @@ fn read_limited<R: Read>(
     Ok(buffer)
 }
 
+fn request_commit_plan(
+    config: &ResolvedConfig,
+    prompt: &llm::Prompt,
+    format: OutputFormat,
+) -> Result<CommitPlan, ExitCode> {
+    request_commit_plan_impl(config, prompt).map_err(|err| map_llm_error(format, err))
+}
+
+#[cfg(not(test))]
+fn request_commit_plan_impl(
+    config: &ResolvedConfig,
+    prompt: &llm::Prompt,
+) -> Result<CommitPlan, LlmError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| LlmError::Runtime(err.to_string()))?;
+    runtime.block_on(llm::generate_commit_plan(config, prompt))
+}
+
+#[cfg(test)]
+fn request_commit_plan_impl(
+    _config: &ResolvedConfig,
+    _prompt: &llm::Prompt,
+) -> Result<CommitPlan, LlmError> {
+    Ok(CommitPlan {
+        schema_version: SCHEMA_VERSION.to_string(),
+        request_id: None,
+        warnings: None,
+        input: None,
+        plan: vec![atomc_core::types::CommitUnit {
+            id: "commit-1".to_string(),
+            type_: atomc_core::types::CommitType::Docs,
+            scope: Some("cli".to_string()),
+            summary: "document CLI plan output and diff input handling examples".to_string(),
+            body: vec![
+                "Add usage examples for plan output".to_string(),
+                "Clarify diff input handling details".to_string(),
+            ],
+            files: vec!["docs/02_cli_spec.md".to_string()],
+            hunks: Vec::new(),
+        }],
+    })
+}
+
+fn map_llm_error(format: OutputFormat, error: LlmError) -> ExitCode {
+    match error {
+        LlmError::Runtime(message) => emit_error(
+            format,
+            ErrorCode::LlmRuntimeError,
+            "llm request failed",
+            Some(serde_json::json!({ "error": message })),
+        ),
+        LlmError::Parse(message) => emit_error(
+            format,
+            ErrorCode::LlmParseError,
+            "llm response parse failed",
+            Some(serde_json::json!({ "error": message })),
+        ),
+        LlmError::Timeout => emit_error(
+            format,
+            ErrorCode::Timeout,
+            "llm request timed out",
+            None,
+        ),
+        LlmError::UnsupportedRuntime(runtime) => emit_error(
+            format,
+            ErrorCode::ConfigError,
+            "unsupported llm runtime",
+            Some(serde_json::json!({ "runtime": runtime })),
+        ),
+    }
+}
+
 fn is_stdin_path(path: &Path) -> bool {
     path == Path::new("-")
 }
@@ -311,6 +491,9 @@ enum ErrorCode {
     UsageError,
     InputInvalid,
     ConfigError,
+    LlmRuntimeError,
+    LlmParseError,
+    Timeout,
     GitError,
 }
 
@@ -320,6 +503,9 @@ impl ErrorCode {
             ErrorCode::UsageError => "usage_error",
             ErrorCode::InputInvalid => "input_invalid",
             ErrorCode::ConfigError => "config_error",
+            ErrorCode::LlmRuntimeError => "llm_runtime_error",
+            ErrorCode::LlmParseError => "llm_parse_error",
+            ErrorCode::Timeout => "timeout",
             ErrorCode::GitError => "git_error",
         }
     }
@@ -329,6 +515,9 @@ impl ErrorCode {
             ErrorCode::UsageError => ExitCode::from(2),
             ErrorCode::InputInvalid => ExitCode::from(3),
             ErrorCode::ConfigError => ExitCode::from(7),
+            ErrorCode::LlmRuntimeError => ExitCode::from(4),
+            ErrorCode::LlmParseError => ExitCode::from(5),
+            ErrorCode::Timeout => ExitCode::from(4),
             ErrorCode::GitError => ExitCode::from(6),
         }
     }
@@ -361,6 +550,57 @@ fn emit_error(format: OutputFormat, code: ErrorCode, message: &str, details: Opt
         }
     }
     code.exit_code()
+}
+
+fn emit_plan(format: OutputFormat, plan: &CommitPlan) -> Result<(), ExitCode> {
+    match format {
+        OutputFormat::Json => {
+            let payload = serde_json::to_string(plan).unwrap_or_else(|_| {
+                format!(
+                    "{{\"schema_version\":\"{}\",\"error\":\"failed to serialize plan\"}}",
+                    SCHEMA_VERSION
+                )
+            });
+            println!("{payload}");
+            Ok(())
+        }
+        OutputFormat::Human => {
+            print_plan_human(plan);
+            Ok(())
+        }
+    }
+}
+
+fn print_plan_human(plan: &CommitPlan) {
+    println!("Commit plan ({} commits):", plan.plan.len());
+    for (idx, unit) in plan.plan.iter().enumerate() {
+        let header = match unit.scope.as_deref() {
+            Some(scope) => format!("{}[{}]: {}", commit_type_str(&unit.type_), scope, unit.summary),
+            None => format!("{}: {}", commit_type_str(&unit.type_), unit.summary),
+        };
+        println!("{}. {}", idx + 1, header);
+        for line in &unit.body {
+            println!("   {}", line);
+        }
+        if !unit.files.is_empty() {
+            println!("   files: {}", unit.files.join(", "));
+        }
+    }
+}
+
+fn commit_type_str(commit_type: &atomc_core::types::CommitType) -> &'static str {
+    match commit_type {
+        atomc_core::types::CommitType::Feat => "feat",
+        atomc_core::types::CommitType::Fix => "fix",
+        atomc_core::types::CommitType::Refactor => "refactor",
+        atomc_core::types::CommitType::Style => "style",
+        atomc_core::types::CommitType::Docs => "docs",
+        atomc_core::types::CommitType::Test => "test",
+        atomc_core::types::CommitType::Chore => "chore",
+        atomc_core::types::CommitType::Build => "build",
+        atomc_core::types::CommitType::Perf => "perf",
+        atomc_core::types::CommitType::Ci => "ci",
+    }
 }
 
 fn request_id() -> String {
@@ -418,7 +658,40 @@ mod tests {
     use atomc_core::config::ResolvedConfig;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct EnvVarGuard {
+        key: String,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self {
+                key: key.to_string(),
+                previous,
+            }
+        }
+    }
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.previous {
+                std::env::set_var(&self.key, value);
+            } else {
+                std::env::remove_var(&self.key);
+            }
+        }
+    }
 
     fn temp_dir(prefix: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -503,6 +776,7 @@ mod tests {
 
     #[test]
     fn handle_plan_computes_repo_diff_when_missing_input() {
+        let _lock = lock_env();
         let dir = temp_dir("repo-diff");
         fs::create_dir_all(&dir).unwrap();
 
@@ -526,7 +800,7 @@ mod tests {
 
         if let Commands::Plan(ref args) = cli.command {
             let result = handle_plan(&cli, args);
-            assert!(result.is_err());
+            assert!(result.is_ok());
         }
 
         fs::remove_dir_all(&dir).ok();
@@ -534,6 +808,7 @@ mod tests {
 
     #[test]
     fn handle_apply_computes_repo_diff_when_missing_input() {
+        let _lock = lock_env();
         let dir = temp_dir("repo-apply");
         fs::create_dir_all(&dir).unwrap();
 
@@ -566,6 +841,7 @@ mod tests {
 
     #[test]
     fn handle_plan_reports_git_error_when_diff_fails() {
+        let _lock = lock_env();
         let dir = temp_dir("repo-fail");
         fs::create_dir_all(&dir).unwrap();
 
@@ -587,14 +863,7 @@ mod tests {
             }),
         };
 
-        let mut config = ResolvedConfig::defaults();
-        config.max_diff_bytes = 0;
-        let overrides = PartialConfig {
-            max_diff_bytes: Some(0),
-            ..PartialConfig::default()
-        };
-        let resolved = resolve_config(&cli, overrides, OutputFormat::Json).unwrap();
-        assert_eq!(resolved.max_diff_bytes, 0);
+        let _env_guard = EnvVarGuard::set("LOCAL_COMMIT_MAX_DIFF_BYTES", "0");
 
         if let Commands::Plan(ref args) = cli.command {
             let result = handle_plan(&cli, args);
