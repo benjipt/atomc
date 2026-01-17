@@ -823,6 +823,7 @@ fn planned_results(plan: &CommitPlan) -> Vec<ApplyResult> {
         .collect()
 }
 
+#[cfg(test)]
 fn applied_results(plan: &[atomc_core::types::CommitUnit]) -> Vec<ApplyResult> {
     plan.iter()
         .map(|unit| ApplyResult {
@@ -1330,15 +1331,21 @@ mod tests {
         }
     }
 
-    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    static SERVER_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn lock_test_state() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+    }
 
     fn lock_env() -> std::sync::MutexGuard<'static, ()> {
-        ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+        lock_test_state()
     }
 
     fn lock_server() -> std::sync::MutexGuard<'static, ()> {
-        SERVER_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+        lock_test_state()
     }
 
     fn set_apply_failure(value: bool) {
