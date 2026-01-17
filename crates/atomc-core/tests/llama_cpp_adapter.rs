@@ -82,7 +82,7 @@ async fn llama_cpp_client_parses_commit_plan() {
             }
         ]
     });
-    let response = json!({ "choices": [{ "message": { "content": plan.to_string() } }] });
+    let response = json!({ "choices": [{ "message": { "content": plan.to_string() } }], "error": null });
     let captured = Arc::new(Mutex::new(None));
     let (base_url, shutdown) = spawn_server(response, captured.clone()).await;
 
@@ -186,6 +186,44 @@ async fn llama_cpp_client_times_out() {
 
     let error = client.generate_commit_plan(&prompt, &options).await.unwrap_err();
     assert!(matches!(error, LlmError::Timeout));
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn llama_cpp_client_accepts_text_fallback() {
+    let plan = json!({
+        "schema_version": "v1",
+        "plan": [
+            {
+                "id": "commit-1",
+                "type": "docs",
+                "scope": "cli",
+                "summary": "document CLI plan and apply flags for usage examples",
+                "body": ["Add usage examples", "Clarify diff input options"],
+                "files": ["docs/02_cli_spec.md"],
+                "hunks": []
+            }
+        ]
+    });
+    let response = json!({ "choices": [{ "text": plan.to_string() }] });
+    let captured = Arc::new(Mutex::new(None));
+    let (base_url, shutdown) = spawn_server(response, captured).await;
+
+    let client = LlamaCppClient::new(base_url);
+    let prompt = Prompt {
+        system: "system prompt".to_string(),
+        user: "user prompt".to_string(),
+    };
+    let options = LlmOptions {
+        model: "deepseek-coder".to_string(),
+        temperature: 0.2,
+        max_tokens: 128,
+        timeout: Duration::from_secs(2),
+    };
+
+    let plan = client.generate_commit_plan(&prompt, &options).await.unwrap();
+    assert_eq!(plan.plan.len(), 1);
 
     let _ = shutdown.send(());
 }

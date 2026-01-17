@@ -226,6 +226,7 @@ impl LlamaCppClient {
         let content = value
             .pointer("/choices/0/message/content")
             .and_then(|value| value.as_str())
+            .or_else(|| value.pointer("/choices/0/text").and_then(|value| value.as_str()))
             .ok_or_else(|| LlmError::Parse("missing chat completion content".to_string()))?;
 
         parse_commit_plan(content)
@@ -272,6 +273,9 @@ fn map_reqwest_error(error: reqwest::Error) -> LlmError {
 
 fn llama_cpp_error_message(value: &Value) -> Option<String> {
     let error = value.get("error")?;
+    if error.is_null() {
+        return None;
+    }
     if let Some(message) = error.get("message").and_then(|value| value.as_str()) {
         return Some(message.to_string());
     }
