@@ -118,6 +118,31 @@ async fn cli_apply_dry_run_accepts_stdin_diff() {
 }
 
 #[tokio::test]
+async fn cli_apply_human_format_emits_text() {
+    let repo = init_repo_with_change();
+    let plan_json = plan_payload(&["file.txt"]);
+    let mock = start_mock_ollama(plan_json).await;
+    let diff = run_git(repo.path(), &["diff"]);
+
+    let stdout = run_atomc(
+        &[
+            "apply",
+            "--repo",
+            repo.path().to_str().expect("repo path"),
+            "--format",
+            "human",
+        ],
+        repo.path(),
+        &mock.base_url,
+        Some(&diff),
+    )
+    .await;
+    assert!(stdout.contains("Apply plan (1 commits):"));
+    assert!(stdout.contains(SUMMARY));
+    assert!(!stdout.trim_start().starts_with('{'));
+}
+
+#[tokio::test]
 async fn cli_apply_execute_creates_commit() {
     let repo = init_repo_with_change();
     let plan_json = plan_payload(&["file.txt"]);
