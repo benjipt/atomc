@@ -39,6 +39,10 @@ pub struct PlanArgs {
     pub no_include_untracked: bool,
     #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
     pub format: OutputFormat,
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub log_diff: bool,
+    #[arg(long = "no-log-diff", action = ArgAction::SetTrue, conflicts_with = "log_diff")]
+    pub no_log_diff: bool,
     #[arg(long)]
     pub model: Option<String>,
     #[arg(long)]
@@ -52,6 +56,16 @@ impl PlanArgs {
         if self.no_include_untracked {
             Some(false)
         } else if self.include_untracked {
+            Some(true)
+        } else {
+            None
+        }
+    }
+
+    pub fn log_diff_override(&self) -> Option<bool> {
+        if self.no_log_diff {
+            Some(false)
+        } else if self.log_diff {
             Some(true)
         } else {
             None
@@ -73,6 +87,10 @@ pub struct ApplyArgs {
     pub no_include_untracked: bool,
     #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
     pub format: OutputFormat,
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub log_diff: bool,
+    #[arg(long = "no-log-diff", action = ArgAction::SetTrue, conflicts_with = "log_diff")]
+    pub no_log_diff: bool,
     #[arg(long)]
     pub model: Option<String>,
     #[arg(long)]
@@ -93,6 +111,16 @@ impl ApplyArgs {
             None
         }
     }
+
+    pub fn log_diff_override(&self) -> Option<bool> {
+        if self.no_log_diff {
+            Some(false)
+        } else if self.log_diff {
+            Some(true)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -107,6 +135,22 @@ pub struct ServeArgs {
     pub log_format: LogFormat,
     #[arg(long, default_value_t = 60)]
     pub request_timeout: u64,
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub log_diff: bool,
+    #[arg(long = "no-log-diff", action = ArgAction::SetTrue, conflicts_with = "log_diff")]
+    pub no_log_diff: bool,
+}
+
+impl ServeArgs {
+    pub fn log_diff_override(&self) -> Option<bool> {
+        if self.no_log_diff {
+            Some(false)
+        } else if self.log_diff {
+            Some(true)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy)]

@@ -60,6 +60,7 @@ fn handle_plan(cli: &Cli, args: &PlanArgs) -> Result<(), ExitCode> {
         args.model.clone(),
         args.diff_mode,
         args.include_untracked_override(),
+        args.log_diff_override(),
         args.timeout,
     );
     let config = resolve_config(cli, overrides, args.format)?;
@@ -125,6 +126,7 @@ fn handle_apply(cli: &Cli, args: &ApplyArgs) -> Result<(), ExitCode> {
         args.model.clone(),
         args.diff_mode,
         args.include_untracked_override(),
+        args.log_diff_override(),
         args.timeout,
     );
     let config = resolve_config(cli, overrides, args.format)?;
@@ -210,6 +212,7 @@ fn handle_serve(cli: &Cli, args: &ServeArgs) -> Result<(), ExitCode> {
     let overrides = PartialConfig {
         model: args.model.clone(),
         llm_timeout_secs: Some(args.request_timeout),
+        log_diff: args.log_diff_override(),
         ..PartialConfig::default()
     };
     let config = resolve_config(cli, overrides, OutputFormat::Human)?;
@@ -245,6 +248,7 @@ struct PlanRequest {
     include_untracked: Option<bool>,
     git_status: Option<String>,
     model: Option<String>,
+    log_diff: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -259,6 +263,7 @@ struct ApplyRequestBody {
     execute: Option<bool>,
     cleanup_on_error: Option<bool>,
     dry_run: Option<bool>,
+    log_diff: Option<bool>,
 }
 
 fn build_app(state: ServerState) -> Router {
@@ -299,6 +304,7 @@ async fn plan_handler(
         payload.model.clone(),
         payload.diff_mode,
         payload.include_untracked,
+        payload.log_diff,
     );
 
     let repo_path = payload.repo_path.as_deref();
@@ -371,6 +377,7 @@ async fn apply_handler(
         payload.model.clone(),
         payload.diff_mode,
         payload.include_untracked,
+        payload.log_diff,
     );
 
     if let Err(response) = validate_repo_path_http(&payload.repo_path, &request_id) {
@@ -465,6 +472,7 @@ fn config_with_request_overrides(
     model: Option<String>,
     diff_mode: Option<config::DiffMode>,
     include_untracked: Option<bool>,
+    log_diff: Option<bool>,
 ) -> ResolvedConfig {
     let mut config = base.clone();
     if let Some(model) = model {
@@ -475,6 +483,9 @@ fn config_with_request_overrides(
     }
     if let Some(include_untracked) = include_untracked {
         config.include_untracked = include_untracked;
+    }
+    if let Some(log_diff) = log_diff {
+        config.log_diff = log_diff;
     }
     config
 }
@@ -732,12 +743,14 @@ fn command_overrides(
     model: Option<String>,
     diff_mode: Option<cli::DiffMode>,
     include_untracked: Option<bool>,
+    log_diff: Option<bool>,
     timeout: Option<u64>,
 ) -> PartialConfig {
     PartialConfig {
         model,
         diff_mode: diff_mode.map(map_diff_mode),
         include_untracked,
+        log_diff,
         llm_timeout_secs: timeout,
         ..PartialConfig::default()
     }
@@ -1604,6 +1617,8 @@ mod tests {
                 include_untracked: false,
                 no_include_untracked: false,
                 format: OutputFormat::Json,
+                log_diff: false,
+                no_log_diff: false,
                 model: None,
                 dry_run: true,
                 timeout: None,
@@ -1636,6 +1651,8 @@ mod tests {
                 include_untracked: false,
                 no_include_untracked: false,
                 format: OutputFormat::Json,
+                log_diff: false,
+                no_log_diff: false,
                 model: None,
                 execute: false,
                 cleanup_on_error: false,
@@ -1670,6 +1687,8 @@ mod tests {
                 include_untracked: false,
                 no_include_untracked: false,
                 format: OutputFormat::Json,
+                log_diff: false,
+                no_log_diff: false,
                 model: None,
                 execute: true,
                 cleanup_on_error: true,
@@ -1812,6 +1831,8 @@ mod tests {
                 include_untracked: false,
                 no_include_untracked: false,
                 format: OutputFormat::Json,
+                log_diff: false,
+                no_log_diff: false,
                 model: None,
                 dry_run: true,
                 timeout: None,
