@@ -4,9 +4,10 @@ use atomc_core::config::{self, ConfigError, PartialConfig, ResolvedConfig};
 use atomc_core::git::{self, GitError};
 use atomc_core::hash;
 use atomc_core::llm::{self, LlmError, PromptContext};
+use atomc_core::schema::{self, SchemaKind};
 use atomc_core::semantic::{self, ScopePolicy, SemanticWarning};
 use atomc_core::types::{
-    ApplyResult, ApplyStatus, CommitApplyResponse, CommitPlan, DiffMode as OutputDiffMode,
+    ApplyResult, ApplyStatus, CommitApplyResponse, CommitPlan, CommitUnit, DiffMode as OutputDiffMode,
     ErrorDetail, ErrorResponse, InputMeta, InputSource, Warning,
 };
 use atomc_core::SCHEMA_VERSION;
@@ -260,6 +261,7 @@ struct ApplyRequestBody {
     include_untracked: Option<bool>,
     git_status: Option<String>,
     model: Option<String>,
+    plan: Option<Vec<CommitUnit>>,
     execute: Option<bool>,
     cleanup_on_error: Option<bool>,
     dry_run: Option<bool>,
@@ -405,21 +407,34 @@ async fn apply_handler(
         return response;
     }
 
-    let prompt = llm::build_prompt(PromptContext {
-        repo_path: Some(payload.repo_path.as_path()),
-        diff_mode: input_diff_mode(&source, config.diff_mode),
-        include_untracked: input_include_untracked(&source, config.include_untracked),
-        git_status: payload.git_status.as_deref(),
-        diff: &diff,
-    });
+    let (mut plan, warnings) = if let Some(plan_units) = payload.plan {
+        let plan = match build_request_plan(plan_units, &request_id) {
+            Ok(plan) => plan,
+            Err(response) => return response,
+        };
+        let warnings = match semantic_warnings_request(&plan, &request_id) {
+            Ok(warnings) => warnings,
+            Err(response) => return response,
+        };
+        (plan, warnings)
+    } else {
+        let prompt = llm::build_prompt(PromptContext {
+            repo_path: Some(payload.repo_path.as_path()),
+            diff_mode: input_diff_mode(&source, config.diff_mode),
+            include_untracked: input_include_untracked(&source, config.include_untracked),
+            git_status: payload.git_status.as_deref(),
+            diff: &diff,
+        });
 
-    let mut plan = match request_commit_plan_http(&config, &prompt, &request_id).await {
-        Ok(plan) => plan,
-        Err(response) => return response,
-    };
-    let warnings = match semantic_warnings_http(&plan, &request_id) {
-        Ok(warnings) => warnings,
-        Err(response) => return response,
+        let plan = match request_commit_plan_http(&config, &prompt, &request_id).await {
+            Ok(plan) => plan,
+            Err(response) => return response,
+        };
+        let warnings = match semantic_warnings_http(&plan, &request_id) {
+            Ok(warnings) => warnings,
+            Err(response) => return response,
+        };
+        (plan, warnings)
     };
 
     plan.schema_version = SCHEMA_VERSION.to_string();
@@ -610,6 +625,46 @@ fn semantic_warnings_http(plan: &CommitPlan, request_id: &str) -> Result<Vec<War
             });
             Err(error_response(
                 ErrorCode::LlmParseError,
+                "semantic validation failed",
+                Some(details),
+                request_id,
+            ))
+        }
+    }
+}
+
+fn build_request_plan(plan: Vec<CommitUnit>, request_id: &str) -> Result<CommitPlan, Response> {
+    let plan_units = plan;
+    let value = serde_json::json!({
+        "schema_version": SCHEMA_VERSION,
+        "plan": &plan_units,
+    });
+    if let Err(err) = schema::validate_schema(SchemaKind::CommitPlan, &value) {
+        return Err(error_response(
+            ErrorCode::InputInvalid,
+            "plan failed schema validation",
+            Some(serde_json::json!({ "error": err.to_string() })),
+            request_id,
+        ));
+    }
+    Ok(CommitPlan {
+        schema_version: SCHEMA_VERSION.to_string(),
+        request_id: None,
+        warnings: None,
+        input: None,
+        plan: plan_units,
+    })
+}
+
+fn semantic_warnings_request(plan: &CommitPlan, request_id: &str) -> Result<Vec<Warning>, Response> {
+    match semantic::validate_commit_units(&plan.plan, ScopePolicy::Warn) {
+        Ok(report) => Ok(semantic_warnings_to_warnings(&report.warnings)),
+        Err(errors) => {
+            let details = serde_json::json!({
+                "errors": errors.iter().map(|err| err.to_string()).collect::<Vec<_>>()
+            });
+            Err(error_response(
+                ErrorCode::InputInvalid,
                 "semantic validation failed",
                 Some(details),
                 request_id,
