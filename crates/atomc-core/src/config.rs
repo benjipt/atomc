@@ -81,15 +81,16 @@ pub fn resolve_config(
 ) -> Result<ResolvedConfig, ConfigError> {
     let env_path = config_path_from_env();
     let required = cli_path.is_some() || env_path.is_some();
-    let path = cli_path
-        .clone()
-        .or(env_path.clone())
-        .unwrap_or(default_config_path()?);
+    let path = match cli_path.clone().or(env_path.clone()) {
+        Some(path) => path,
+        None => default_config_path()?,
+    };
 
     let file_config = load_config_file(&path, required)?;
     let env_config = load_env_config()?;
 
     let mut resolved = ResolvedConfig::defaults();
+    // Precedence: defaults < config file < env vars < CLI overrides.
     file_config.apply_to(&mut resolved);
     env_config.apply_to(&mut resolved);
     overrides.apply_to(&mut resolved);
