@@ -1,0 +1,108 @@
+use atomc_core::config::DiffMode;
+use atomc_core::git::{apply_plan, compute_diff, ApplyRequest, GitError};
+use atomc_core::hash::diff_hash;
+use atomc_core::types::{ApplyStatus, CommitType, CommitUnit, InputSource};
+use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn temp_dir(prefix: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let count = COUNTER.fetch_add(1, Ordering::SeqCst);
+    std::env::temp_dir().join(format!("atomc-apply-{prefix}-{nanos}-{count}"))
+}
+
+fn run_git(repo: &PathBuf, args: &[&str]) {
+    let status = Command::new("git")
+        .current_dir(repo)
+        .args(args)
+        .status()
+        .expect("git command failed to start");
+    assert!(status.success(), "git command failed: git {}", args.join(" "));
+}
+
+fn setup_repo() -> PathBuf {
+    let dir = temp_dir("repo");
+    fs::create_dir_all(&dir).unwrap();
+    run_git(&dir, &["init", "-q"]);
+    run_git(&dir, &["config", "user.email", "atomc@example.com"]);
+    run_git(&dir, &["config", "user.name", "atomc"]);
+
+    fs::write(dir.join("file.txt"), "one\n").unwrap();
+    run_git(&dir, &["add", "file.txt"]);
+    run_git(&dir, &["commit", "-qm", "init"]);
+
+    fs::write(dir.join("file.txt"), "one\ntwo\n").unwrap();
+
+    dir
+}
+
+fn sample_plan() -> Vec<CommitUnit> {
+    vec![CommitUnit {
+        id: "commit-1".to_string(),
+        type_: CommitType::Docs,
+        scope: Some("cli".to_string()),
+        summary: "document apply execution flow and expected git outputs".to_string(),
+        body: vec![
+            "Update apply usage info".to_string(),
+            "Note git execution ordering".to_string(),
+        ],
+        files: vec!["file.txt".to_string()],
+        hunks: Vec::new(),
+    }]
+}
+
+#[test]
+fn apply_plan_creates_commit() {
+    let repo = setup_repo();
+    let diff = compute_diff(&repo, DiffMode::Worktree, false).unwrap();
+    let plan = sample_plan();
+    let request = ApplyRequest {
+        repo: &repo,
+        plan: &plan,
+        diff: &diff,
+        source: InputSource::Repo,
+        diff_mode: DiffMode::Worktree,
+        include_untracked: false,
+        expected_diff_hash: Some(diff_hash(&diff)),
+        cleanup_on_error: false,
+    };
+
+    let results = apply_plan(request).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status, ApplyStatus::Applied);
+    assert!(results[0].commit_hash.as_ref().unwrap().len() > 6);
+
+    fs::remove_dir_all(&repo).ok();
+}
+
+#[test]
+fn apply_plan_rejects_changed_diff() {
+    let repo = setup_repo();
+    let diff = compute_diff(&repo, DiffMode::Worktree, false).unwrap();
+    let plan = sample_plan();
+    fs::write(repo.join("file.txt"), "one\ntwo\nthree\n").unwrap();
+
+    let request = ApplyRequest {
+        repo: &repo,
+        plan: &plan,
+        diff: &diff,
+        source: InputSource::Repo,
+        diff_mode: DiffMode::Worktree,
+        include_untracked: false,
+        expected_diff_hash: Some(diff_hash(&diff)),
+        cleanup_on_error: false,
+    };
+
+    let error = apply_plan(request).unwrap_err();
+    assert!(matches!(error, GitError::DiffHashMismatch { .. }));
+
+    fs::remove_dir_all(&repo).ok();
+}
