@@ -55,6 +55,8 @@ atomc serve [options]
 - `plan` returns a JSON `CommitPlan` payload.
 - `apply` returns a JSON report with plan, actions, and results.
 - All JSON outputs include `schema_version` and `request_id` when available.
+- CLI generates `request_id` per invocation for JSON output; `serve`
+  echoes `X-Request-Id` or generates one when absent.
 - Errors are JSON with machine-readable codes.
 
 ### Schema Versioning

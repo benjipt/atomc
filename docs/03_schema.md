@@ -41,6 +41,13 @@ Fields:
 - `message` (string, required)
 - `details` (object, optional)
 
+## Request ID
+- CLI: generated per command invocation for JSON output.
+- Server: generated per HTTP request; if `X-Request-Id` is provided,
+  it is echoed back in responses.
+- Format: opaque string; UUID or ULID recommended. A `req_` prefix is
+  allowed but not required.
+
 ## Commit Plan Response
 Returned by `atomc plan` and `/v1/commit-plan`.
 
