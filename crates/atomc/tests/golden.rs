@@ -12,6 +12,11 @@ struct GoldenCase {
     plan: &'static str,
 }
 
+struct ApplyCase {
+    plan: &'static str,
+    ok: bool,
+}
+
 #[tokio::test]
 async fn golden_plan_fixtures_match_cli_output() {
     let cases = [
@@ -50,6 +55,30 @@ async fn golden_plan_fixtures_match_cli_output() {
         assert_eq!(output["input"]["source"], "diff");
         assert!(output.get("warnings").map_or(true, |value| value.is_null()));
         assert_eq!(output["plan"], expected["plan"]);
+    }
+}
+
+#[test]
+fn golden_apply_fixtures_validate_schema() {
+    let cases = [
+        ApplyCase {
+            plan: "plans/valid_apply.plan.json",
+            ok: true,
+        },
+        ApplyCase {
+            plan: "plans/invalid_apply.plan.json",
+            ok: false,
+        },
+    ];
+
+    for case in cases {
+        let payload = load_fixture(case.plan);
+        let value: Value = serde_json::from_str(&payload).expect("fixture json");
+        let result = atomc_core::schema::validate_schema(
+            atomc_core::schema::SchemaKind::CommitApply,
+            &value,
+        );
+        assert_eq!(result.is_ok(), case.ok, "fixture {}", case.plan);
     }
 }
 

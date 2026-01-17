@@ -1,0 +1,25 @@
+{
+  "schema_version": "v1",
+  "plan": [
+    {
+      "id": "commit-1",
+      "type": "docs",
+      "scope": "cli",
+      "summary": "document CLI plan output and diff input handling examples",
+      "body": ["Add usage examples", "Clarify diff input options"],
+      "files": ["docs/02_cli_spec.md"],
+      "hunks": []
+    }
+  ],
+  "results": [
+    {
+      "id": "commit-1",
+      "status": "failed",
+      "error": {
+        "code": "git_error",
+        "message": "apply failed",
+        "details": {"stderr": "boom"}
+      }
+    }
+  ]
+}
