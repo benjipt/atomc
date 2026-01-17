@@ -23,6 +23,7 @@ atomc serve [options]
 - `--log-level trace|debug|info|warn|error`
 - `--quiet`: suppress non-error logs.
 - `--no-color`: disable ANSI color in human output.
+- `--log-diff` / `--no-log-diff`: opt-in diff logging (redacted by default).
 - `--timeout <seconds>`: LLM request timeout (plan/apply, and per-request
   in serve).
 NOTE: Diff contents are redacted from logs unless explicitly enabled.
@@ -150,6 +151,7 @@ Options:
 - `--port <port>` (default: 49152)
 - `--model <name>` (overrides config/env)
 - `--log-format json|text`
+- `--log-diff` / `--no-log-diff`
 - `--request-timeout <seconds>` (default: 60)
 
 Notes:

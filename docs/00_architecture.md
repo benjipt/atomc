@@ -87,6 +87,7 @@ git diff | atomc plan --format json
   "diff": "<optional git diff text>",
   "diff_mode": "all",
   "include_untracked": true,
+  "log_diff": false,
   "git_status": "<optional git status>",
   "model": "deepseek-coder",
   "dry_run": true
@@ -131,6 +132,7 @@ Response:
   "diff": "<optional git diff text>",
   "diff_mode": "all",
   "include_untracked": true,
+  "log_diff": false,
   "plan": [ /* optional; same as above */ ],
   "execute": true
 }
