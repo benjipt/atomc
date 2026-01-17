@@ -1,6 +1,7 @@
 use crate::types::CommitUnit;
 
 pub type SemanticValidationErrors = Vec<SemanticValidationError>;
+pub type SemanticValidationWarnings = Vec<SemanticWarning>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SemanticValidationError {
@@ -14,24 +15,47 @@ pub enum SemanticValidationError {
     BodyLineEmpty { id: String, index: usize },
     #[error("commit {id} scope is empty")]
     ScopeEmpty { id: String },
+    #[error("commit {id} scope is missing")]
+    ScopeMissing { id: String },
     #[error("commit {id} scope is not kebab-case")]
     ScopeInvalid { id: String },
 }
 
-pub fn validate_commit_units(units: &[CommitUnit]) -> Result<(), SemanticValidationErrors> {
+#[derive(Debug, Clone, Copy)]
+pub enum ScopePolicy {
+    Require,
+    Allow,
+    Warn,
+}
+
+#[derive(Debug, Clone)]
+pub enum SemanticWarning {
+    ScopeMissing { id: String },
+}
+
+pub fn validate_commit_units(
+    units: &[CommitUnit],
+    scope_policy: ScopePolicy,
+) -> Result<SemanticValidationWarnings, SemanticValidationErrors> {
     let mut errors = Vec::new();
+    let mut warnings = Vec::new();
     for unit in units {
-        validate_commit_unit(unit, &mut errors);
+        validate_commit_unit(unit, scope_policy, &mut errors, &mut warnings);
     }
 
     if errors.is_empty() {
-        Ok(())
+        Ok(warnings)
     } else {
         Err(errors)
     }
 }
 
-fn validate_commit_unit(unit: &CommitUnit, errors: &mut SemanticValidationErrors) {
+fn validate_commit_unit(
+    unit: &CommitUnit,
+    scope_policy: ScopePolicy,
+    errors: &mut SemanticValidationErrors,
+    warnings: &mut SemanticValidationWarnings,
+) {
     if unit.id.trim().is_empty() {
         errors.push(SemanticValidationError::EmptyId {
             id: unit.id.clone(),
@@ -63,16 +87,27 @@ fn validate_commit_unit(unit: &CommitUnit, errors: &mut SemanticValidationErrors
         }
     }
 
-    if let Some(scope) = unit.scope.as_deref() {
-        if scope.trim().is_empty() {
+    match unit.scope.as_deref() {
+        Some(scope) if scope.trim().is_empty() => {
             errors.push(SemanticValidationError::ScopeEmpty {
                 id: unit.id.clone(),
             });
-        } else if !is_kebab_case(scope) {
+        }
+        Some(scope) if !is_kebab_case(scope) => {
             errors.push(SemanticValidationError::ScopeInvalid {
                 id: unit.id.clone(),
             });
         }
+        None => match scope_policy {
+            ScopePolicy::Require => errors.push(SemanticValidationError::ScopeMissing {
+                id: unit.id.clone(),
+            }),
+            ScopePolicy::Warn => warnings.push(SemanticWarning::ScopeMissing {
+                id: unit.id.clone(),
+            }),
+            ScopePolicy::Allow => {}
+        },
+        _ => {}
     }
 }
 
