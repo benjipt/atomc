@@ -29,8 +29,8 @@ atomc serve [options]
 ## Global Conventions
 - Output format defaults to JSON on stdout.
 - Logs and diagnostics go to stderr.
-- Input diff is required for `plan` and `apply`.
-- The tool does not compute diffs in MVP; caller provides diff.
+- Diff input can be provided or computed from `--repo`.
+- If both diff and repo are provided, the explicit diff is used.
 - `apply` defaults to dry-run; use `--execute` to commit.
 
 ## Input
@@ -39,21 +39,31 @@ atomc serve [options]
 - Optional: `--diff-file <path>` to read from a file.
 - If both stdin and `--diff-file` are provided, error.
 - `--diff-file -` is treated as stdin.
+- If no diff is provided and `--repo` is set, atomc computes the diff.
+
+### Diff Mode (repo-derived diffs)
+- `--diff-mode worktree|staged|all` (default: all)
+- `all` includes both staged and unstaged changes.
+- `--include-untracked` (default) includes new files.
+- `--no-include-untracked` excludes untracked files.
 
 ### Repo Path
-- `--repo <path>` is optional for `plan`.
+- `--repo <path>` is optional for `plan` unless no diff is provided.
 - `--repo <path>` is required for `apply` (even in dry-run).
-- The CLI does not compute a diff from the repo in MVP.
+- Repo-derived diffs use `diff_mode` and `include_untracked`.
 
 ### Input Rules
-- If stdin is empty and `--diff-file` is not provided, error.
-- Empty diffs are rejected.
+- If neither a diff nor `--repo` is provided, error.
+- If a diff is provided, `diff_mode` and `include_untracked` are ignored.
+- Empty diffs are rejected (including repo-derived diffs).
 - Diff size is bounded by `max_diff_bytes` (config/env); default is 2,000,000.
 
 ## Output
 ### JSON (default)
 - `plan` returns a JSON `CommitPlan` payload.
 - `apply` returns a JSON report with plan, actions, and results.
+- `plan`/`apply` include `input` metadata when available (source, mode,
+  untracked, diff hash).
 - All JSON outputs include `schema_version` and `request_id` when available.
 - CLI generates `request_id` per invocation for JSON output; `serve`
   echoes `X-Request-Id` or generates one when absent.
@@ -72,7 +82,7 @@ atomc serve [options]
     "code": "input_invalid",
     "message": "stdin is empty",
     "details": {
-      "hint": "pipe a git diff or use --diff-file"
+      "hint": "pipe a git diff, use --diff-file, or pass --repo"
     }
   }
 }
@@ -94,13 +104,15 @@ atomc serve [options]
 ## Commands
 
 ### `plan`
-Generate an atomic commit plan from a diff.
+Generate an atomic commit plan from a diff (provided or derived).
 
 Required:
-- Diff via stdin or `--diff-file`.
+- Diff via stdin/`--diff-file`, or `--repo` to compute one.
 
 Options:
-- `--repo <path>`: optional repo metadata.
+- `--repo <path>`: optional repo metadata or diff source.
+- `--diff-mode worktree|staged|all` (repo diff only)
+- `--include-untracked` / `--no-include-untracked` (repo diff only)
 - `--format json|human` (default: json)
 - `--model <name>` (overrides config/env)
 - `--dry-run` (no side effects; default behavior)
@@ -110,11 +122,13 @@ Options:
 Generate a plan and optionally execute it via git.
 
 Required:
-- Diff via stdin or `--diff-file`.
 - `--repo <path>` (repo to operate on)
+- Diff via stdin/`--diff-file` is optional; if absent, atomc computes it.
 
 Options:
 - `--execute` (perform git staging + commits)
+- `--diff-mode worktree|staged|all` (repo diff only)
+- `--include-untracked` / `--no-include-untracked` (repo diff only)
 - `--format json|human` (default: json)
 - `--model <name>` (overrides config/env)
 - `--cleanup-on-error` (optional; defaults off)
@@ -124,6 +138,8 @@ Behavior:
 - Without `--execute`, the command produces a plan and reports
   intended actions without modifying the repo.
 - With `--execute`, commits are created in plan order.
+- If a repo-derived diff is used, atomc snapshots the diff and aborts
+  if the worktree changes or staged diff does not match the plan.
 
 ### `serve`
 Run a local HTTP server for repeated requests.
@@ -159,6 +175,8 @@ Defaults apply when a value is not provided via CLI, env, or config.
 | temperature | 0.2 | Low randomness for stable plans |
 | llm_timeout_secs | 60 | Seconds |
 | max_diff_bytes | 2000000 | Bytes |
+| diff_mode | all | worktree, staged, or all |
+| include_untracked | true | Include new files in repo-derived diffs |
 
 Rationale: a low temperature favors consistent, conservative commit
 planning in the MVP while still allowing minor variation in phrasing.
@@ -178,6 +196,8 @@ planning in the MVP while still allowing minor variation in phrasing.
 - `LOCAL_COMMIT_TEMPERATURE`
 - `LOCAL_COMMIT_LLM_TIMEOUT_SECS`
 - `LOCAL_COMMIT_MAX_DIFF_BYTES`
+- `LOCAL_COMMIT_DIFF_MODE`
+- `LOCAL_COMMIT_INCLUDE_UNTRACKED`
 - `LOCAL_COMMIT_AGENT_CONFIG` (explicit config file path)
 
 ### Config File Format
@@ -190,6 +210,8 @@ max_tokens = 2048
 temperature = 0.2
 llm_timeout_secs = 60
 max_diff_bytes = 2000000
+diff_mode = "all"
+include_untracked = true
 ```
 
 ## Exit Codes (MVP)
@@ -204,8 +226,9 @@ max_diff_bytes = 2000000
 
 ## Examples
 ```
+atomc plan --repo . --format json
+atomc apply --repo . --dry-run
+atomc apply --repo . --execute
 git diff | atomc plan --format json
-git diff | atomc apply --repo . --dry-run
-git diff | atomc apply --repo . --execute
-atomc serve --port 49152
+atomc plan --repo . --diff-mode staged --no-include-untracked
 ```

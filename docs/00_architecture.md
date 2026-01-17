@@ -1,7 +1,7 @@
 # Local Atomic Commit Service - Architecture / Tech Spec
 
 ## Summary
-Build a local-first service in Rust that accepts a git diff (and optional repo metadata), produces an atomic commit plan via a local LLM (DeepSeek Coder by default), and optionally executes `git add` / `git commit` for each atomic unit. The service supports a CLI by default and an optional localhost HTTP server for repeated calls.
+Build a local-first service in Rust that accepts a repo path and/or a git diff, computes the diff locally when needed, produces an atomic commit plan via a local LLM (DeepSeek Coder by default), and optionally executes `git add` / `git commit` for each atomic unit. The service supports a CLI by default and an optional localhost HTTP server for repeated calls.
 
 ## Goals
 - Easy local setup and distribution (single Rust binary).
@@ -30,7 +30,8 @@ Build a local-first service in Rust that accepts a git diff (and optional repo m
 
 ### 1) CLI Interface
 - Default entrypoint.
-- Accepts input diff via stdin or `--diff-file`.
+- Accepts input diff via stdin/`--diff-file` or computes diff from `--repo`.
+- Supports diff mode and untracked inclusion for repo-derived diffs.
 - Accepts repo path and flags (dry-run, execute).
 - Emits plan (JSON or human-friendly).
 
@@ -58,7 +59,7 @@ Responsibilities:
 - Supports dry-run mode.
 
 ## Data Flow
-1. Caller provides `git diff` + optional metadata (repo path, status).
+1. Caller provides repo path and/or diff; if repo path is provided and diff is absent, the service computes it (mode=all, include_untracked=true).
 2. Orchestrator validates inputs and builds the prompt.
 3. LLM returns a structured `CommitPlan`.
 4. Orchestrator validates the plan and returns it.
@@ -72,9 +73,10 @@ Responsibilities:
 
 ### CLI
 ```
-git diff | atomc plan --repo . --format json
-git diff | atomc apply --repo . --dry-run
-git diff | atomc apply --repo . --execute
+atomc plan --repo . --format json
+atomc apply --repo . --dry-run
+atomc apply --repo . --execute
+git diff | atomc plan --format json
 ```
 
 ### HTTP
@@ -82,16 +84,28 @@ git diff | atomc apply --repo . --execute
 ```json
 {
   "repo_path": "/path/to/repo",
-  "diff": "<git diff text>",
+  "diff": "<optional git diff text>",
+  "diff_mode": "all",
+  "include_untracked": true,
   "git_status": "<optional git status>",
   "model": "deepseek-coder",
   "dry_run": true
 }
 ```
+If `diff` is omitted, the server computes it from the repo using
+`diff_mode` and `include_untracked`.
 
 Response:
 ```json
 {
+  "schema_version": "v1",
+  "request_id": "req_123",
+  "input": {
+    "source": "repo",
+    "diff_mode": "all",
+    "include_untracked": true,
+    "diff_hash": "sha256:..."
+  },
   "plan": [
     {
       "id": "commit-1",
@@ -142,6 +156,8 @@ Response:
 - `LOCAL_COMMIT_RUNTIME`: `ollama` | `llama.cpp`
 - `LOCAL_COMMIT_OLLAMA_URL`: default `http://localhost:11434`
 - `LOCAL_COMMIT_MAX_TOKENS`, `LOCAL_COMMIT_TEMPERATURE`
+- `LOCAL_COMMIT_LLM_TIMEOUT_SECS`, `LOCAL_COMMIT_MAX_DIFF_BYTES`
+- `LOCAL_COMMIT_DIFF_MODE`, `LOCAL_COMMIT_INCLUDE_UNTRACKED`
 
 ## Observability
 - Structured logs (JSON optional).
@@ -156,7 +172,6 @@ Response:
 ## Open Questions
 - Should Git Adapter use `git add -p` for hunk-level staging?
 - How strict should schema validation be for LLM output?
-- Should the service compute diff on-demand if `repo_path` is provided?
 
 ## Milestones
 1. CLI plan-only flow with Ollama backend.

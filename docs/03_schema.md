@@ -48,6 +48,17 @@ Fields:
 - Format: opaque string; UUID or ULID recommended. A `req_` prefix is
   allowed but not required.
 
+## Input Metadata
+Plan/apply responses may include an `input` object describing how the
+plan diff was derived.
+
+Fields:
+- `source` (string, required): `repo` or `diff`.
+- `diff_mode` (string, optional): `worktree`, `staged`, or `all`.
+- `include_untracked` (bool, optional): only for repo-derived diffs.
+- `diff_hash` (string, optional): SHA-256 of the diff text formatted as
+  `sha256:<hex>`.
+
 ## Commit Plan Response
 Returned by `atomc plan` and `/v1/commit-plan`.
 
@@ -55,6 +66,12 @@ Returned by `atomc plan` and `/v1/commit-plan`.
 {
   "schema_version": "v1",
   "request_id": "req_123",
+  "input": {
+    "source": "repo",
+    "diff_mode": "all",
+    "include_untracked": true,
+    "diff_hash": "sha256:..."
+  },
   "plan": [
     {
       "id": "commit-1",
@@ -111,6 +128,12 @@ Returned by `atomc apply` and `/v1/commit-apply`.
 {
   "schema_version": "v1",
   "request_id": "req_456",
+  "input": {
+    "source": "repo",
+    "diff_mode": "all",
+    "include_untracked": true,
+    "diff_hash": "sha256:..."
+  },
   "plan": [ /* same as Commit Plan */ ],
   "results": [
     {
@@ -142,7 +165,7 @@ Used for any failure; never mixed with a success payload.
     "code": "input_invalid",
     "message": "stdin is empty",
     "details": {
-      "hint": "pipe a git diff or use --diff-file"
+      "hint": "pipe a git diff, use --diff-file, or pass --repo"
     }
   }
 }
@@ -162,6 +185,271 @@ Fields:
 - `llm_parse_error`
 - `git_error`
 - `timeout`
+
+## JSON Schemas (Draft 2020-12)
+
+### Commit Plan Response Schema
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atomc.dev/schema/v1/commit-plan.json",
+  "type": "object",
+  "required": ["schema_version", "plan"],
+  "properties": {
+    "schema_version": {"const": "v1"},
+    "request_id": {"type": "string"},
+    "warnings": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/warning"}
+    },
+    "input": {"$ref": "#/$defs/input"},
+    "plan": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/commitUnit"}
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "warning": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string"},
+        "message": {"type": "string"},
+        "details": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "input": {
+      "type": "object",
+      "required": ["source"],
+      "properties": {
+        "source": {"enum": ["repo", "diff"]},
+        "diff_mode": {"enum": ["worktree", "staged", "all"]},
+        "include_untracked": {"type": "boolean"},
+        "diff_hash": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "commitUnit": {
+      "type": "object",
+      "required": ["id", "type", "scope", "summary", "body", "files", "hunks"],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {
+          "enum": [
+            "feat",
+            "fix",
+            "refactor",
+            "style",
+            "docs",
+            "test",
+            "chore",
+            "build",
+            "perf",
+            "ci"
+          ]
+        },
+        "scope": {"type": ["string", "null"]},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 72},
+        "body": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": {"type": "string"}
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"}
+        },
+        "hunks": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/hunk"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "hunk": {
+      "type": "object",
+      "required": ["file", "header"],
+      "properties": {
+        "file": {"type": "string"},
+        "header": {"type": "string"},
+        "id": {"type": "string"}
+      },
+      "additionalProperties": true
+    }
+  }
+}
+```
+
+### Commit Apply Response Schema
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atomc.dev/schema/v1/commit-apply.json",
+  "type": "object",
+  "required": ["schema_version", "plan", "results"],
+  "properties": {
+    "schema_version": {"const": "v1"},
+    "request_id": {"type": "string"},
+    "warnings": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/warning"}
+    },
+    "input": {"$ref": "#/$defs/input"},
+    "plan": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/commitUnit"}
+    },
+    "results": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/result"}
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "warning": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string"},
+        "message": {"type": "string"},
+        "details": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "input": {
+      "type": "object",
+      "required": ["source"],
+      "properties": {
+        "source": {"enum": ["repo", "diff"]},
+        "diff_mode": {"enum": ["worktree", "staged", "all"]},
+        "include_untracked": {"type": "boolean"},
+        "diff_hash": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "commitUnit": {
+      "type": "object",
+      "required": ["id", "type", "scope", "summary", "body", "files", "hunks"],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {
+          "enum": [
+            "feat",
+            "fix",
+            "refactor",
+            "style",
+            "docs",
+            "test",
+            "chore",
+            "build",
+            "perf",
+            "ci"
+          ]
+        },
+        "scope": {"type": ["string", "null"]},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 72},
+        "body": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": {"type": "string"}
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"}
+        },
+        "hunks": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/hunk"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "hunk": {
+      "type": "object",
+      "required": ["file", "header"],
+      "properties": {
+        "file": {"type": "string"},
+        "header": {"type": "string"},
+        "id": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "result": {
+      "type": "object",
+      "required": ["id", "status"],
+      "properties": {
+        "id": {"type": "string"},
+        "status": {"enum": ["planned", "applied", "skipped", "failed"]},
+        "commit_hash": {"type": "string"},
+        "error": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/errorDetail"}
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "errorDetail": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string"},
+        "message": {"type": "string"},
+        "details": {"type": "object"}
+      },
+      "additionalProperties": true
+    }
+  }
+}
+```
+
+### Error Response Schema
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atomc.dev/schema/v1/error.json",
+  "type": "object",
+  "required": ["schema_version", "error"],
+  "properties": {
+    "schema_version": {"const": "v1"},
+    "request_id": {"type": "string"},
+    "error": {"$ref": "#/$defs/error"}
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "enum": [
+            "usage_error",
+            "input_invalid",
+            "config_error",
+            "llm_runtime_error",
+            "llm_parse_error",
+            "git_error",
+            "timeout"
+          ]
+        },
+        "message": {"type": "string"},
+        "details": {"type": "object"}
+      },
+      "additionalProperties": true
+    }
+  }
+}
+```
 
 ## Notes
 - Scope is required unless the change is truly global; set `scope` to
