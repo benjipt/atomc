@@ -9,7 +9,7 @@ use cli::{ApplyArgs, Cli, Commands, OutputFormat, PlanArgs};
 use serde_json::Value;
 use std::process::ExitCode;
 use std::io::{self, IsTerminal, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use ulid::Ulid;
 
 fn main() -> ExitCode {
@@ -186,11 +186,12 @@ fn validate_diff_requirements(
 }
 
 fn resolve_diff_input(
-    diff_file: Option<std::path::PathBuf>,
+    diff_file: Option<PathBuf>,
     max_bytes: u64,
     format: OutputFormat,
 ) -> Result<Option<String>, ExitCode> {
     let stdin_is_tty = io::stdin().is_terminal();
+    // If stdin isn't a TTY, assume data is being piped.
     let stdin_has_data = !stdin_is_tty;
 
     if let Some(path) = diff_file {
@@ -272,10 +273,11 @@ fn read_limited<R: Read>(
 ) -> Result<String, ExitCode> {
     let mut buffer = String::new();
     let limit = max_bytes.saturating_add(1);
+    // Read with a hard cap to avoid unbounded memory usage.
     let mut limited = reader.take(limit);
-    let details = details.unwrap_or_else(|| serde_json::json!({}));
+    let base_details = details.unwrap_or_else(|| serde_json::json!({}));
     limited.read_to_string(&mut buffer).map_err(|err| {
-        let mut payload = details.clone();
+        let mut payload = base_details.clone();
         if let Some(obj) = payload.as_object_mut() {
             obj.insert("error".to_string(), serde_json::json!(err.to_string()));
         }
@@ -284,7 +286,7 @@ fn read_limited<R: Read>(
 
     let max_bytes_usize = usize::try_from(max_bytes).unwrap_or(usize::MAX);
     if buffer.as_bytes().len() > max_bytes_usize {
-        let mut payload = details;
+        let mut payload = base_details;
         if let Some(obj) = payload.as_object_mut() {
             obj.insert("max_diff_bytes".to_string(), serde_json::json!(max_bytes));
         }
