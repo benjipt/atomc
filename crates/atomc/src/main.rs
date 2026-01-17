@@ -484,9 +484,7 @@ fn config_with_request_overrides(
     if let Some(include_untracked) = include_untracked {
         config.include_untracked = include_untracked;
     }
-    if let Some(log_diff) = log_diff {
-        config.log_diff = log_diff;
-    }
+    config.log_diff = config.log_diff && log_diff.unwrap_or(false);
     config
 }
 
@@ -1728,9 +1726,9 @@ mod tests {
         let _lock = lock_server();
         set_llm_mode(0);
         let _ = take_log_diff_preview();
-        let app = super::build_app(ServerState {
-            config: ResolvedConfig::defaults(),
-        });
+        let mut config = ResolvedConfig::defaults();
+        config.log_diff = true;
+        let app = super::build_app(ServerState { config });
         let payload = serde_json::json!({
             "diff": "diff --git a/file.txt b/file.txt\n",
             "log_diff": true
@@ -1757,9 +1755,9 @@ mod tests {
         let _lock = lock_server();
         set_llm_mode(0);
         let _ = take_log_diff_preview();
-        let app = super::build_app(ServerState {
-            config: ResolvedConfig::defaults(),
-        });
+        let mut config = ResolvedConfig::defaults();
+        config.log_diff = true;
+        let app = super::build_app(ServerState { config });
         let payload = serde_json::json!({
             "diff": "diff --git a/file.txt b/file.txt\n",
             "log_diff": false
