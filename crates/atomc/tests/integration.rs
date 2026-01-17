@@ -190,6 +190,34 @@ async fn http_apply_dry_run_with_repo_diff() {
 }
 
 #[tokio::test]
+async fn http_apply_dry_run_with_explicit_diff() {
+    let repo = init_repo_with_change();
+    let plan_json = plan_payload(&["file.txt"]);
+    let mock = start_mock_ollama(plan_json).await;
+    let diff = run_git(repo.path(), &["diff"]);
+    let port = reserve_port();
+    let server = start_atomc_server(port, &mock.base_url);
+    wait_for_port(port).await;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{}/v1/commit-apply", server.base_url))
+        .json(&json!({
+            "repo_path": repo.path().to_string_lossy(),
+            "diff": diff,
+            "execute": false
+        }))
+        .send()
+        .await
+        .expect("apply response");
+
+    assert!(response.status().is_success());
+    let payload: Value = response.json().await.expect("apply json");
+    assert_eq!(payload["input"]["source"], "diff");
+    assert_eq!(payload["results"][0]["status"], "planned");
+}
+
+#[tokio::test]
 async fn http_apply_accepts_explicit_plan() {
     let repo = init_repo_with_change();
     let plan_json = plan_payload(&["file.txt"]);
