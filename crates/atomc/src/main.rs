@@ -18,6 +18,10 @@ use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use ulid::Ulid;
 
+#[cfg(test)]
+static APPLY_SHOULD_FAIL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -344,6 +348,17 @@ fn planned_results(plan: &CommitPlan) -> Vec<ApplyResult> {
         .collect()
 }
 
+fn applied_results(plan: &[atomc_core::types::CommitUnit]) -> Vec<ApplyResult> {
+    plan.iter()
+        .map(|unit| ApplyResult {
+            id: unit.id.clone(),
+            status: ApplyStatus::Applied,
+            commit_hash: Some("test-hash".to_string()),
+            error: None,
+        })
+        .collect()
+}
+
 fn semantic_warnings_to_warnings(warnings: &[SemanticWarning]) -> Vec<Warning> {
     warnings
         .iter()
@@ -538,11 +553,15 @@ fn execute_apply_plan_impl(request: git::ApplyRequest<'_>) -> Result<Vec<ApplyRe
 }
 
 #[cfg(test)]
-fn execute_apply_plan_impl(_request: git::ApplyRequest<'_>) -> Result<Vec<ApplyResult>, GitError> {
-    Err(GitError::CommandFailed {
-        cmd: "git apply (test)".to_string(),
-        stderr: "simulated failure".to_string(),
-    })
+fn execute_apply_plan_impl(request: git::ApplyRequest<'_>) -> Result<Vec<ApplyResult>, GitError> {
+    if APPLY_SHOULD_FAIL.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        return Err(GitError::CommandFailed {
+            cmd: "git apply (test)".to_string(),
+            stderr: "simulated failure".to_string(),
+        });
+    }
+
+    Ok(applied_results(request.plan))
 }
 
 fn map_llm_error(format: OutputFormat, error: LlmError) -> ExitCode {
@@ -810,6 +829,7 @@ mod tests {
     use atomc_core::config::ResolvedConfig;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::atomic::Ordering;
     use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -833,6 +853,10 @@ mod tests {
 
     fn lock_env() -> std::sync::MutexGuard<'static, ()> {
         ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    fn set_apply_failure(value: bool) {
+        super::APPLY_SHOULD_FAIL.store(value, Ordering::SeqCst);
     }
 
     impl Drop for EnvVarGuard {
@@ -994,6 +1018,7 @@ mod tests {
     #[test]
     fn handle_apply_execute_reports_git_error() {
         let _lock = lock_env();
+        set_apply_failure(true);
         let dir = temp_dir("repo-exec");
         fs::create_dir_all(&dir).unwrap();
 
