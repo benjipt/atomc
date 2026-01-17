@@ -160,7 +160,7 @@ using `diff_mode` and `include_untracked`.
 ## Configuration
 - `LOCAL_COMMIT_MODEL`: e.g., `deepseek-coder`
 - `LOCAL_COMMIT_RUNTIME`: `ollama` | `llama.cpp`
-- `LOCAL_COMMIT_OLLAMA_URL`: default `http://localhost:11434`
+- `LOCAL_COMMIT_OLLAMA_URL`: base URL for Ollama or llama.cpp (default `http://localhost:11434`)
 - `LOCAL_COMMIT_MAX_TOKENS`, `LOCAL_COMMIT_TEMPERATURE`
 - `LOCAL_COMMIT_LLM_TIMEOUT_SECS`, `LOCAL_COMMIT_MAX_DIFF_BYTES`
 - `LOCAL_COMMIT_DIFF_MODE`, `LOCAL_COMMIT_INCLUDE_UNTRACKED`

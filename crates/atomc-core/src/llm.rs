@@ -161,6 +161,77 @@ impl OllamaClient {
     }
 }
 
+pub struct LlamaCppClient {
+    base_url: String,
+    http: reqwest::Client,
+}
+
+impl LlamaCppClient {
+    pub fn new(base_url: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.into(),
+            http: HTTP_CLIENT.clone(),
+        }
+    }
+
+    pub async fn generate_commit_plan(
+        &self,
+        prompt: &Prompt,
+        options: &LlmOptions,
+    ) -> Result<CommitPlan, LlmError> {
+        let url = format!(
+            "{}/v1/chat/completions",
+            self.base_url.trim_end_matches('/')
+        );
+        let request = LlamaCppChatRequest {
+            model: &options.model,
+            messages: vec![
+                LlamaCppMessage {
+                    role: "system",
+                    content: &prompt.system,
+                },
+                LlamaCppMessage {
+                    role: "user",
+                    content: &prompt.user,
+                },
+            ],
+            temperature: options.temperature,
+            max_tokens: options.max_tokens,
+            stream: false,
+        };
+
+        let response = self
+            .http
+            .post(url)
+            .json(&request)
+            .timeout(options.timeout)
+            .send()
+            .await
+            .map_err(map_reqwest_error)?;
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|err| LlmError::Runtime(format!("status {status}: {err}")))?;
+        if !status.is_success() {
+            return Err(LlmError::Runtime(format!("status {status}: {body}")));
+        }
+
+        let value: Value =
+            serde_json::from_str(&body).map_err(|err| LlmError::Parse(err.to_string()))?;
+        if let Some(error) = llama_cpp_error_message(&value) {
+            return Err(LlmError::Runtime(error));
+        }
+        let content = value
+            .pointer("/choices/0/message/content")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| LlmError::Parse("missing chat completion content".to_string()))?;
+
+        parse_commit_plan(content)
+    }
+}
+
 pub async fn generate_commit_plan(
     config: &ResolvedConfig,
     prompt: &Prompt,
@@ -171,7 +242,10 @@ pub async fn generate_commit_plan(
             let client = OllamaClient::new(config.ollama_url.clone());
             client.generate_commit_plan(prompt, &options).await
         }
-        Runtime::LlamaCpp => Err(LlmError::UnsupportedRuntime("llama.cpp".to_string())),
+        Runtime::LlamaCpp => {
+            let client = LlamaCppClient::new(config.ollama_url.clone());
+            client.generate_commit_plan(prompt, &options).await
+        }
     }
 }
 
@@ -196,6 +270,17 @@ fn map_reqwest_error(error: reqwest::Error) -> LlmError {
     }
 }
 
+fn llama_cpp_error_message(value: &Value) -> Option<String> {
+    let error = value.get("error")?;
+    if let Some(message) = error.get("message").and_then(|value| value.as_str()) {
+        return Some(message.to_string());
+    }
+    if let Some(message) = error.as_str() {
+        return Some(message.to_string());
+    }
+    Some(error.to_string())
+}
+
 #[derive(Serialize)]
 struct OllamaGenerateRequest<'a> {
     model: &'a str,
@@ -215,6 +300,21 @@ struct OllamaOptions {
 struct OllamaGenerateResponse {
     response: Option<String>,
     error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct LlamaCppChatRequest<'a> {
+    model: &'a str,
+    messages: Vec<LlamaCppMessage<'a>>,
+    temperature: f32,
+    max_tokens: u32,
+    stream: bool,
+}
+
+#[derive(Serialize)]
+struct LlamaCppMessage<'a> {
+    role: &'a str,
+    content: &'a str,
 }
 
 static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);

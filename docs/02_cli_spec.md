@@ -170,7 +170,7 @@ Defaults apply when a value is not provided via CLI, env, or config.
 | --- | --- | --- |
 | model | deepseek-coder | LLM model name |
 | runtime | ollama | LLM runtime backend |
-| ollama_url | http://localhost:11434 | Ollama base URL |
+| ollama_url | http://localhost:11434 | LLM base URL (Ollama or llama.cpp) |
 | max_tokens | 2048 | Tokens per request |
 | temperature | 0.2 | Low randomness for stable plans |
 | llm_timeout_secs | 60 | Seconds |
@@ -191,7 +191,7 @@ planning in the MVP while still allowing minor variation in phrasing.
 ### Environment Variables (initial)
 - `LOCAL_COMMIT_MODEL`
 - `LOCAL_COMMIT_RUNTIME`
-- `LOCAL_COMMIT_OLLAMA_URL`
+- `LOCAL_COMMIT_OLLAMA_URL` (base URL for Ollama or llama.cpp)
 - `LOCAL_COMMIT_MAX_TOKENS`
 - `LOCAL_COMMIT_TEMPERATURE`
 - `LOCAL_COMMIT_LLM_TIMEOUT_SECS`
