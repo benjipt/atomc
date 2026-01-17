@@ -1,0 +1,14 @@
+{
+  "schema_version": "v1",
+  "plan": [
+    {
+      "id": "commit-1",
+      "type": "docs",
+      "scope": "cli",
+      "summary": "too short",
+      "body": ["Add docs"],
+      "files": ["docs/02_cli_spec.md"],
+      "hunks": []
+    }
+  ]
+}
