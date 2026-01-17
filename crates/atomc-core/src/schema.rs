@@ -9,10 +9,10 @@ pub enum SchemaKind {
     ErrorResponse,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum SchemaValidationError {
     #[error("schema JSON parse error: {0}")]
-    SchemaParse(#[from] serde_json::Error),
+    SchemaParse(String),
     #[error("schema compile error: {0}")]
     SchemaCompile(String),
     #[error("schema validation errors: {0:?}")]
@@ -29,25 +29,18 @@ pub fn validate_schema(kind: SchemaKind, instance: &Value) -> Result<(), SchemaV
     }
 }
 
-fn schema_for(kind: SchemaKind) -> Result<Validator, SchemaValidationError> {
+fn schema_for(kind: SchemaKind) -> Result<&'static Validator, SchemaValidationError> {
     match kind {
-        SchemaKind::CommitPlan => match COMMIT_PLAN_SCHEMA.as_ref() {
-            Ok(validator) => Ok(validator.clone()),
-            Err(_) => compile_schema(COMMIT_PLAN_SCHEMA_STR),
-        },
-        SchemaKind::CommitApply => match COMMIT_APPLY_SCHEMA.as_ref() {
-            Ok(validator) => Ok(validator.clone()),
-            Err(_) => compile_schema(COMMIT_APPLY_SCHEMA_STR),
-        },
-        SchemaKind::ErrorResponse => match ERROR_SCHEMA.as_ref() {
-            Ok(validator) => Ok(validator.clone()),
-            Err(_) => compile_schema(ERROR_SCHEMA_STR),
-        },
+        SchemaKind::CommitPlan => COMMIT_PLAN_SCHEMA.as_ref(),
+        SchemaKind::CommitApply => COMMIT_APPLY_SCHEMA.as_ref(),
+        SchemaKind::ErrorResponse => ERROR_SCHEMA.as_ref(),
     }
+    .map_err(|err| err.clone())
 }
 
 fn compile_schema(schema_str: &str) -> Result<Validator, SchemaValidationError> {
-    let schema_value: Value = serde_json::from_str(schema_str)?;
+    let schema_value: Value = serde_json::from_str(schema_str)
+        .map_err(|err| SchemaValidationError::SchemaParse(err.to_string()))?;
     jsonschema::draft202012::options()
         .build(&schema_value)
         .map_err(|err| SchemaValidationError::SchemaCompile(err.to_string()))

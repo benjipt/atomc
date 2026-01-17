@@ -18,8 +18,8 @@ fn base_unit() -> CommitUnit {
 #[test]
 fn valid_commit_unit_passes_validation() {
     let unit = base_unit();
-    let warnings = validate_commit_units(&[unit], ScopePolicy::Warn).unwrap();
-    assert!(warnings.is_empty());
+    let report = validate_commit_units(&[unit], ScopePolicy::Warn).unwrap();
+    assert!(report.warnings.is_empty());
 }
 
 #[test]
@@ -81,8 +81,9 @@ fn scope_none_is_allowed_for_global_changes() {
     let mut unit = base_unit();
     unit.scope = None;
 
-    let warnings = validate_commit_units(&[unit], ScopePolicy::Warn).unwrap();
-    assert!(warnings
+    let report = validate_commit_units(&[unit], ScopePolicy::Warn).unwrap();
+    assert!(report
+        .warnings
         .iter()
         .any(|warning| matches!(warning, SemanticWarning::ScopeMissing { .. })));
 }
@@ -92,8 +93,8 @@ fn kebab_case_scope_is_allowed() {
     let mut unit = base_unit();
     unit.scope = Some("cli-tools".to_string());
 
-    let warnings = validate_commit_units(&[unit], ScopePolicy::Warn).unwrap();
-    assert!(warnings.is_empty());
+    let report = validate_commit_units(&[unit], ScopePolicy::Warn).unwrap();
+    assert!(report.warnings.is_empty());
 }
 
 #[test]

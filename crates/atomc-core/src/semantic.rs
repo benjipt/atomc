@@ -33,10 +33,15 @@ pub enum SemanticWarning {
     ScopeMissing { id: String },
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SemanticValidationReport {
+    pub warnings: SemanticValidationWarnings,
+}
+
 pub fn validate_commit_units(
     units: &[CommitUnit],
     scope_policy: ScopePolicy,
-) -> Result<SemanticValidationWarnings, SemanticValidationErrors> {
+) -> Result<SemanticValidationReport, SemanticValidationErrors> {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
     for unit in units {
@@ -44,7 +49,7 @@ pub fn validate_commit_units(
     }
 
     if errors.is_empty() {
-        Ok(warnings)
+        Ok(SemanticValidationReport { warnings })
     } else {
         Err(errors)
     }
