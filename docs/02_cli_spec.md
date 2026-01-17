@@ -145,6 +145,22 @@ Notes:
 3) Config file
 4) Defaults
 
+### Defaults (MVP)
+Defaults apply when a value is not provided via CLI, env, or config.
+
+| Setting | Default | Notes |
+| --- | --- | --- |
+| model | deepseek-coder | LLM model name |
+| runtime | ollama | LLM runtime backend |
+| ollama_url | http://localhost:11434 | Ollama base URL |
+| max_tokens | 2048 | Tokens per request |
+| temperature | 0.2 | Low randomness for stable plans |
+| llm_timeout_secs | 60 | Seconds |
+| max_diff_bytes | 2000000 | Bytes |
+
+Rationale: a low temperature favors consistent, conservative commit
+planning in the MVP while still allowing minor variation in phrasing.
+
 ### Default Config Location
 - Convention: user-scoped by default, OS-native when possible, and
   override-friendly via `--config` or environment variables.
