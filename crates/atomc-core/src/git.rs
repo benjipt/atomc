@@ -4,7 +4,7 @@ use std::process::Command;
 
 use crate::config::DiffMode;
 use crate::hash;
-use crate::types::{ApplyResult, ApplyStatus, CommitType, CommitUnit, InputSource};
+use crate::types::{ApplyResult, ApplyStatus, CommitType, CommitUnit};
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitError {
@@ -34,7 +34,6 @@ pub struct ApplyRequest<'a> {
     pub repo: &'a Path,
     pub plan: &'a [CommitUnit],
     pub diff: &'a str,
-    pub source: InputSource,
     pub diff_mode: DiffMode,
     pub include_untracked: bool,
     pub expected_diff_hash: Option<String>,
@@ -80,7 +79,6 @@ pub fn apply_plan(request: ApplyRequest<'_>) -> Result<Vec<ApplyResult>, GitErro
 
     verify_diff_hash(
         request.repo,
-        &request.source,
         request.diff_mode,
         request.include_untracked,
         &expected_hash,
@@ -90,7 +88,6 @@ pub fn apply_plan(request: ApplyRequest<'_>) -> Result<Vec<ApplyResult>, GitErro
     for unit in request.plan {
         verify_diff_hash(
             request.repo,
-            &request.source,
             request.diff_mode,
             request.include_untracked,
             &expected_hash,
@@ -148,15 +145,10 @@ fn list_untracked_files(repo: &Path) -> Result<Vec<PathBuf>, GitError> {
 
 fn verify_diff_hash(
     repo: &Path,
-    source: &InputSource,
     diff_mode: DiffMode,
     include_untracked: bool,
     expected: &str,
 ) -> Result<(), GitError> {
-    if matches!(source, InputSource::Diff) {
-        return Ok(());
-    }
-
     let current = compute_diff(repo, diff_mode, include_untracked)?;
     let actual = hash::diff_hash(&current);
     if actual != expected {

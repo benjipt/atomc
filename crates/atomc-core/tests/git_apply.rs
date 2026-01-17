@@ -1,7 +1,7 @@
 use atomc_core::config::DiffMode;
 use atomc_core::git::{apply_plan, compute_diff, ApplyRequest, GitError};
 use atomc_core::hash::diff_hash;
-use atomc_core::types::{ApplyStatus, CommitType, CommitUnit, InputSource};
+use atomc_core::types::{ApplyStatus, CommitType, CommitUnit};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -68,7 +68,6 @@ fn apply_plan_creates_commit() {
         repo: &repo,
         plan: &plan,
         diff: &diff,
-        source: InputSource::Repo,
         diff_mode: DiffMode::Worktree,
         include_untracked: false,
         expected_diff_hash: Some(diff_hash(&diff)),
@@ -94,7 +93,6 @@ fn apply_plan_rejects_changed_diff() {
         repo: &repo,
         plan: &plan,
         diff: &diff,
-        source: InputSource::Repo,
         diff_mode: DiffMode::Worktree,
         include_untracked: false,
         expected_diff_hash: Some(diff_hash(&diff)),
@@ -105,4 +103,71 @@ fn apply_plan_rejects_changed_diff() {
     assert!(matches!(error, GitError::DiffHashMismatch { .. }));
 
     fs::remove_dir_all(&repo).ok();
+}
+
+#[test]
+fn apply_plan_rejects_diff_input_mismatch() {
+    let repo = setup_repo();
+    let diff = "diff --git a/file.txt b/file.txt\n";
+    let plan = sample_plan();
+
+    let request = ApplyRequest {
+        repo: &repo,
+        plan: &plan,
+        diff,
+        diff_mode: DiffMode::Worktree,
+        include_untracked: false,
+        expected_diff_hash: Some(diff_hash(diff)),
+        cleanup_on_error: false,
+    };
+
+    let error = apply_plan(request).unwrap_err();
+    assert!(matches!(error, GitError::DiffHashMismatch { .. }));
+
+    fs::remove_dir_all(&repo).ok();
+}
+
+#[test]
+fn apply_plan_cleans_up_on_error() {
+    let repo = setup_repo();
+    fs::write(repo.join("extra.txt"), "extra\n").unwrap();
+    run_git(&repo, &["add", "extra.txt"]);
+
+    let diff = compute_diff(&repo, DiffMode::Worktree, false).unwrap();
+    let plan = sample_plan();
+
+    let request = ApplyRequest {
+        repo: &repo,
+        plan: &plan,
+        diff: &diff,
+        diff_mode: DiffMode::Worktree,
+        include_untracked: false,
+        expected_diff_hash: Some(diff_hash(&diff)),
+        cleanup_on_error: true,
+    };
+
+    let error = apply_plan(request).unwrap_err();
+    assert!(matches!(error, GitError::StagedFilesMismatch { .. }));
+
+    let staged = list_staged_files(&repo);
+    assert!(staged.iter().any(|file| file == "extra.txt"));
+    assert!(!staged.iter().any(|file| file == "file.txt"));
+
+    fs::remove_dir_all(&repo).ok();
+}
+
+fn list_staged_files(repo: &PathBuf) -> Vec<String> {
+    let output = Command::new("git")
+        .current_dir(repo)
+        .args(["diff", "--staged", "--name-only", "-z"])
+        .output()
+        .expect("git diff failed");
+    let status_ok = output.status.success() || matches!(output.status.code(), Some(1));
+    assert!(status_ok, "git diff failed");
+    let stdout = String::from_utf8(output.stdout).expect("utf-8");
+    stdout
+        .split('\0')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| entry.to_string())
+        .collect()
 }
