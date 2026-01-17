@@ -1837,6 +1837,69 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
+    #[tokio::test]
+    async fn apply_endpoint_log_diff_enabled_emits_preview() {
+        let _lock = lock_server();
+        set_llm_mode(0);
+        let _ = take_log_diff_preview();
+        let dir = temp_dir("server-apply-logdiff");
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut config = ResolvedConfig::defaults();
+        config.log_diff = true;
+        let app = super::build_app(ServerState { config });
+        let payload = serde_json::json!({
+            "repo_path": dir,
+            "diff": "diff --git a/file.txt b/file.txt\n",
+            "execute": false,
+            "log_diff": true
+        });
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/commit-apply")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+
+        let (status, _headers, _json) = send_request(app, request).await;
+        assert_eq!(status, StatusCode::OK);
+        let preview = take_log_diff_preview();
+        assert!(preview.as_deref().unwrap_or("").contains("diff --git"));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn apply_endpoint_log_diff_disabled_omits_preview() {
+        let _lock = lock_server();
+        set_llm_mode(0);
+        let _ = take_log_diff_preview();
+        let dir = temp_dir("server-apply-nodiff");
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut config = ResolvedConfig::defaults();
+        config.log_diff = true;
+        let app = super::build_app(ServerState { config });
+        let payload = serde_json::json!({
+            "repo_path": dir,
+            "diff": "diff --git a/file.txt b/file.txt\n",
+            "execute": false,
+            "log_diff": false
+        });
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/commit-apply")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+
+        let (status, _headers, _json) = send_request(app, request).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(take_log_diff_preview().is_none());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn handle_plan_reports_git_error_when_diff_fails() {
         let _lock = lock_env();
