@@ -168,7 +168,7 @@ using `diff_mode` and `include_untracked`.
 ## Observability
 - Structured logs (JSON optional).
 - Log request/response IDs.
-- Redact diffs unless `--debug` enabled.
+- Redact diffs unless `log_diff` is enabled.
 
 ## Testing
 - Unit tests: plan parsing, schema validation.

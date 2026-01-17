@@ -24,7 +24,7 @@ use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use tokio::net::TcpListener;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::filter::LevelFilter;
 use ulid::Ulid;
 
@@ -94,6 +94,8 @@ fn handle_plan(cli: &Cli, args: &PlanArgs) -> Result<(), ExitCode> {
         "plan request start"
     );
 
+    log_diff_preview(&request_id, &diff, config.log_diff);
+
     let prompt = llm::build_prompt(PromptContext {
         repo_path: args.repo.as_deref(),
         diff_mode: input_diff_mode(&source, config.diff_mode),
@@ -153,6 +155,8 @@ fn handle_apply(cli: &Cli, args: &ApplyArgs) -> Result<(), ExitCode> {
         execute = args.execute,
         "apply request start"
     );
+
+    log_diff_preview(&request_id, &diff, config.log_diff);
 
     let prompt = llm::build_prompt(PromptContext {
         repo_path: Some(args.repo.as_path()),
@@ -319,6 +323,7 @@ async fn plan_handler(
         diff_bytes = diff.len(),
         "plan request prepared"
     );
+    log_diff_preview(&request_id, &diff, config.log_diff);
 
     if let Err(response) = validate_diff_size(&diff, config.max_diff_bytes, &request_id) {
         return response;
@@ -387,6 +392,7 @@ async fn apply_handler(
         diff_bytes = diff.len(),
         "apply request prepared"
     );
+    log_diff_preview(&request_id, &diff, config.log_diff);
 
     if let Err(response) = validate_diff_size(&diff, config.max_diff_bytes, &request_id) {
         return response;
@@ -1244,6 +1250,24 @@ fn input_source_str(source: &InputSource) -> &'static str {
         InputSource::Repo => "repo",
         InputSource::Diff => "diff",
     }
+}
+
+fn log_diff_preview(request_id: &str, diff: &str, log_diff: bool) {
+    if !log_diff {
+        return;
+    }
+    let max_bytes = 2_000usize;
+    let bytes = diff.as_bytes();
+    let truncated = bytes.len() > max_bytes;
+    let slice = if truncated { &bytes[..max_bytes] } else { bytes };
+    let preview = String::from_utf8_lossy(slice);
+    debug!(
+        request_id = %request_id,
+        diff_bytes = bytes.len(),
+        diff_truncated = truncated,
+        diff_preview = %preview,
+        "diff logging enabled"
+    );
 }
 
 fn emit_plan(format: OutputFormat, plan: &CommitPlan) -> Result<(), ExitCode> {

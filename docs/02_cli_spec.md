@@ -25,6 +25,7 @@ atomc serve [options]
 - `--no-color`: disable ANSI color in human output.
 - `--timeout <seconds>`: LLM request timeout (plan/apply, and per-request
   in serve).
+NOTE: Diff contents are redacted from logs unless explicitly enabled.
 
 ## Global Conventions
 - Output format defaults to JSON on stdout.
@@ -177,6 +178,7 @@ Defaults apply when a value is not provided via CLI, env, or config.
 | max_diff_bytes | 2000000 | Bytes |
 | diff_mode | all | worktree, staged, or all |
 | include_untracked | true | Include new files in repo-derived diffs |
+| log_diff | false | Log diff contents (unsafe for secrets) |
 
 Rationale: a low temperature favors consistent, conservative commit
 planning in the MVP while still allowing minor variation in phrasing.
@@ -198,6 +200,7 @@ planning in the MVP while still allowing minor variation in phrasing.
 - `LOCAL_COMMIT_MAX_DIFF_BYTES`
 - `LOCAL_COMMIT_DIFF_MODE`
 - `LOCAL_COMMIT_INCLUDE_UNTRACKED`
+- `LOCAL_COMMIT_LOG_DIFF`
 - `LOCAL_COMMIT_AGENT_CONFIG` (explicit config file path)
 
 ### Config File Format
@@ -212,6 +215,7 @@ llm_timeout_secs = 60
 max_diff_bytes = 2000000
 diff_mode = "all"
 include_untracked = true
+log_diff = false
 ```
 
 ## Exit Codes (MVP)
