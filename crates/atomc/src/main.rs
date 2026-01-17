@@ -1,7 +1,7 @@
 mod cli;
 
 use atomc_core::config::{self, ConfigError, PartialConfig, ResolvedConfig};
-use atomc_core::git::GitError;
+use atomc_core::git::{self, GitError};
 use atomc_core::hash;
 use atomc_core::llm::{self, LlmError, PromptContext};
 use atomc_core::semantic::{self, ScopePolicy, SemanticWarning};
@@ -104,15 +104,6 @@ fn handle_apply(cli: &Cli, args: &ApplyArgs) -> Result<(), ExitCode> {
     }
     validate_diff_requirements(&diff, Some(args.repo.as_path()), &config, args.format)?;
 
-    if args.execute {
-        return Err(emit_error(
-            args.format,
-            ErrorCode::UsageError,
-            "apply execution is not yet implemented",
-            None,
-        ));
-    }
-
     let diff = diff.ok_or_else(|| {
         emit_error(
             args.format,
@@ -137,7 +128,30 @@ fn handle_apply(cli: &Cli, args: &ApplyArgs) -> Result<(), ExitCode> {
     plan.input = Some(build_input_meta(source.clone(), &config, &diff));
     plan.warnings = merge_warnings(plan.warnings.take(), warnings.clone());
 
-    let response = build_apply_response(plan, source, &config, &diff);
+    let results = if args.execute {
+        let request = git::ApplyRequest {
+            repo: args.repo.as_path(),
+            plan: &plan.plan,
+            diff: &diff,
+            source: source.clone(),
+            diff_mode: config.diff_mode,
+            include_untracked: config.include_untracked,
+            expected_diff_hash: plan.input.as_ref().and_then(|input| input.diff_hash.clone()),
+            cleanup_on_error: args.cleanup_on_error,
+        };
+        git::apply_plan(request).map_err(|err| {
+            emit_error(
+                args.format,
+                ErrorCode::GitError,
+                "apply execution failed",
+                Some(git_error_details(err)),
+            )
+        })?
+    } else {
+        planned_results(&plan)
+    };
+
+    let response = build_apply_response(plan, results, source, &config, &diff);
 
     emit_apply(args.format, &response)
 }
@@ -302,21 +316,11 @@ fn apply_semantic_validation(plan: &CommitPlan, format: OutputFormat) -> Result<
 
 fn build_apply_response(
     plan: CommitPlan,
+    results: Vec<ApplyResult>,
     source: InputSource,
     config: &ResolvedConfig,
     diff: &str,
 ) -> CommitApplyResponse {
-    let results = plan
-        .plan
-        .iter()
-        .map(|unit| ApplyResult {
-            id: unit.id.clone(),
-            status: ApplyStatus::Planned,
-            commit_hash: None,
-            error: None,
-        })
-        .collect();
-
     let request_id = plan.request_id.clone().or_else(|| Some(request_id()));
 
     CommitApplyResponse {
@@ -327,6 +331,18 @@ fn build_apply_response(
         plan: plan.plan,
         results,
     }
+}
+
+fn planned_results(plan: &CommitPlan) -> Vec<ApplyResult> {
+    plan.plan
+        .iter()
+        .map(|unit| ApplyResult {
+            id: unit.id.clone(),
+            status: ApplyStatus::Planned,
+            commit_hash: None,
+            error: None,
+        })
+        .collect()
 }
 
 fn semantic_warnings_to_warnings(warnings: &[SemanticWarning]) -> Vec<Warning> {
@@ -758,6 +774,17 @@ fn git_error_details(error: GitError) -> Value {
             serde_json::json!({ "cmd": cmd, "error": source.to_string() })
         }
         GitError::OutputNotUtf8 => serde_json::json!({ "error": "git output was not utf-8" }),
+        GitError::DiffHashMismatch { expected, actual } => {
+            serde_json::json!({ "expected": expected, "actual": actual })
+        }
+        GitError::HunksNotSupported { id } => serde_json::json!({ "id": id }),
+        GitError::PlanFileMissing { id, file } => {
+            serde_json::json!({ "id": id, "file": file })
+        }
+        GitError::StagedFilesMismatch { id, expected, actual } => {
+            serde_json::json!({ "id": id, "expected": expected, "actual": actual })
+        }
+        GitError::StagedDiffEmpty { id } => serde_json::json!({ "id": id }),
     }
 }
 
