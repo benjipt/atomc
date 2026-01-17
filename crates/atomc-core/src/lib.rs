@@ -1,3 +1,4 @@
+pub mod config;
 pub mod schema;
 pub mod semantic;
 pub mod types;
