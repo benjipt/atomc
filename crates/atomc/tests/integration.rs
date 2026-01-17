@@ -1,73 +1,15 @@
-use axum::extract::State;
-use axum::routing::post;
-use axum::{Json, Router};
+#[path = "support/integration.rs"]
+mod integration_support;
+mod support;
+
 use serde_json::{json, Value};
-use std::io::Write;
-use std::net::{SocketAddr, TcpListener as StdTcpListener};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
-use tempfile::TempDir;
-use tokio::net::{TcpListener, TcpStream};
-use tokio::task::JoinHandle;
-use tokio::time::{sleep, Duration};
+use integration_support::{
+    init_repo_with_change, reserve_port, run_git, start_atomc_server, wait_for_port,
+};
+use support::{run_atomc, start_mock_ollama};
 
 const SUMMARY: &str = "add integration test coverage for cli and apply flows";
 const SCOPE: &str = "cli-tests";
-
-struct MockOllama {
-    base_url: String,
-    handle: JoinHandle<()>,
-}
-
-impl Drop for MockOllama {
-    fn drop(&mut self) {
-        self.handle.abort();
-    }
-}
-
-struct AtomcServer {
-    base_url: String,
-    child: Child,
-}
-
-impl Drop for AtomcServer {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn atomc_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_atomc"))
-}
-
-fn init_repo_with_change() -> TempDir {
-    let dir = TempDir::new().expect("temp dir");
-    run_git(dir.path(), &["init"]);
-    run_git(dir.path(), &["config", "user.email", "test@example.com"]);
-    run_git(dir.path(), &["config", "user.name", "Atomc Test"]);
-    std::fs::write(dir.path().join("file.txt"), "line-1\n").expect("write file");
-    run_git(dir.path(), &["add", "file.txt"]);
-    run_git(dir.path(), &["commit", "-m", "init"]);
-    std::fs::write(dir.path().join("file.txt"), "line-1\nline-2\n").expect("write change");
-    dir
-}
-
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git command");
-    assert!(
-        output.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
 
 fn plan_payload(files: &[&str]) -> String {
     let plan = json!({
@@ -86,117 +28,6 @@ fn plan_payload(files: &[&str]) -> String {
         }]
     });
     plan.to_string()
-}
-
-async fn start_mock_ollama(plan_json: String) -> MockOllama {
-    let state = Arc::new(plan_json);
-    let app = Router::new()
-        .route(
-            "/api/generate",
-            post(|State(plan): State<Arc<String>>, Json(_): Json<Value>| async move {
-                Json(json!({ "response": (*plan).clone() }))
-            }),
-        )
-        .with_state(state);
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind mock");
-    let addr = listener.local_addr().expect("mock addr");
-    let handle = tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
-    });
-
-    MockOllama {
-        base_url: format!("http://{addr}"),
-        handle,
-    }
-}
-
-fn reserve_port() -> u16 {
-    StdTcpListener::bind("127.0.0.1:0")
-        .expect("reserve port")
-        .local_addr()
-        .expect("port addr")
-        .port()
-}
-
-fn start_atomc_server(port: u16, ollama_url: &str) -> AtomcServer {
-    let mut cmd = Command::new(atomc_bin());
-    cmd.arg("serve")
-        .arg("--host")
-        .arg("127.0.0.1")
-        .arg("--port")
-        .arg(port.to_string())
-        .arg("--request-timeout")
-        .arg("5")
-        .env("LOCAL_COMMIT_RUNTIME", "ollama")
-        .env("LOCAL_COMMIT_OLLAMA_URL", ollama_url)
-        .env_remove("LOCAL_COMMIT_AGENT_CONFIG")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-
-    let child = cmd.spawn().expect("spawn atomc serve");
-    AtomcServer {
-        base_url: format!("http://127.0.0.1:{port}"),
-        child,
-    }
-}
-
-async fn wait_for_port(port: u16) {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    for _ in 0..40 {
-        if TcpStream::connect(addr).await.is_ok() {
-            return;
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
-    panic!("server did not start on port {port}");
-}
-
-async fn run_atomc(args: &[&str], dir: &Path, ollama_url: &str, input: Option<&str>) -> String {
-    let args = args.iter().map(|value| value.to_string()).collect::<Vec<_>>();
-    let dir = dir.to_path_buf();
-    let ollama_url = ollama_url.to_string();
-    let input = input.map(|value| value.to_string());
-
-    tokio::task::spawn_blocking(move || {
-        run_atomc_sync(args, dir, ollama_url, input)
-    })
-    .await
-    .expect("spawn blocking")
-}
-
-fn run_atomc_sync(
-    args: Vec<String>,
-    dir: PathBuf,
-    ollama_url: String,
-    input: Option<String>,
-) -> String {
-    let mut cmd = Command::new(atomc_bin());
-    cmd.args(args)
-        .current_dir(dir)
-        .env("LOCAL_COMMIT_RUNTIME", "ollama")
-        .env("LOCAL_COMMIT_OLLAMA_URL", ollama_url)
-        .env("LOCAL_COMMIT_LLM_TIMEOUT_SECS", "5")
-        .env_remove("LOCAL_COMMIT_AGENT_CONFIG")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    if input.is_some() {
-        cmd.stdin(Stdio::piped());
-    }
-    let mut child = cmd.spawn().expect("spawn atomc");
-    if let Some(payload) = input {
-        let mut stdin = child.stdin.take().expect("stdin");
-        stdin
-            .write_all(payload.as_bytes())
-            .expect("write stdin");
-    }
-    let output = child.wait_with_output().expect("atomc output");
-    assert!(
-        output.status.success(),
-        "atomc failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
 #[tokio::test]
