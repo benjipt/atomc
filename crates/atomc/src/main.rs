@@ -287,3 +287,93 @@ fn emit_error(format: OutputFormat, code: ErrorCode, message: &str, details: Opt
 fn request_id() -> String {
     Ulid::new().to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atomc_core::config::ResolvedConfig;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("atomc-{prefix}-{nanos}"))
+    }
+
+    #[test]
+    fn validate_repo_path_rejects_missing_path() {
+        let path = temp_dir("missing");
+        let result = validate_repo_path(&path, OutputFormat::Json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_repo_path_rejects_file_path() {
+        let dir = temp_dir("file");
+        fs::create_dir_all(&dir).unwrap();
+        let file_path = dir.join("file.txt");
+        fs::write(&file_path, "content").unwrap();
+
+        let result = validate_repo_path(&file_path, OutputFormat::Json);
+        assert!(result.is_err());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn validate_repo_path_accepts_directory() {
+        let dir = temp_dir("dir");
+        fs::create_dir_all(&dir).unwrap();
+
+        let result = validate_repo_path(&dir, OutputFormat::Json);
+        assert!(result.is_ok());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn validate_diff_requirements_rejects_missing_inputs() {
+        let config = ResolvedConfig::defaults();
+        let result = validate_diff_requirements(&None, None, &config, OutputFormat::Json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_diff_requirements_rejects_empty_diff() {
+        let config = ResolvedConfig::defaults();
+        let result = validate_diff_requirements(&Some(String::new()), None, &config, OutputFormat::Json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_diff_requirements_rejects_large_diff() {
+        let mut config = ResolvedConfig::defaults();
+        config.max_diff_bytes = 2;
+
+        let result = validate_diff_requirements(&Some("abc".to_string()), None, &config, OutputFormat::Json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_diff_requirements_accepts_repo_only() {
+        let dir = temp_dir("repo-only");
+        fs::create_dir_all(&dir).unwrap();
+
+        let config = ResolvedConfig::defaults();
+        let result = validate_diff_requirements(&None, Some(dir.as_path()), &config, OutputFormat::Json);
+        assert!(result.is_ok());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn validate_diff_requirements_accepts_diff_only() {
+        let config = ResolvedConfig::defaults();
+        let result = validate_diff_requirements(&Some("diff".to_string()), None, &config, OutputFormat::Json);
+        assert!(result.is_ok());
+    }
+}
