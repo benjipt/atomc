@@ -40,3 +40,30 @@ the evidence that disproved or confirmed them, and the resulting resolution.
   a schema constraint (`hunks` maxItems=0), and introduced a retry on parse
   errors with stricter instructions.
 - Status: Mitigated; re-test with Ollama to confirm.
+
+## Assumption: Schema-valid output implies useful plan quality
+- Observation: Model returned schema-valid JSON with placeholder fields
+  (`file1`, generic summaries) that did not match the diff.
+- Resolution: Pending. Next steps:
+  - Add semantic validation that file paths must appear in the diff.
+  - Tighten the prompt to require file paths taken verbatim from the diff.
+- Status: Investigating.
+
+## Assumption: Model adheres to commit message conventions by default
+- Observation: Output used section labels and bullet formatting in body lines,
+  and sometimes included `type[scope]:` in summary text.
+- Resolution: Pending. Tracked in `docs/08_todo.md` under plan quality.
+- Status: Investigating.
+
+## Assumption: deepseek-coder:latest follows JSON-only output with schema
+- Observation: Returned prose or schema-mismatched JSON despite JSON mode,
+  including alternate top-level keys (`commits`) and non-JSON output.
+- Resolution: Moved default model away from deepseek-coder:latest; added
+  schema-based formatting and stricter prompts.
+- Status: Mitigated; no longer default.
+
+## Assumption: deepseek-coder:6.7b yields stable commit grouping
+- Observation: Produced inconsistent commit grouping and formatting, including
+  section-labeled body lines and over-splitting small doc changes.
+- Resolution: Use qwen2.5-coder:14b as the default while evaluating models.
+- Status: Mitigated; no longer default.

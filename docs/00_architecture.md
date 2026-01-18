@@ -89,7 +89,7 @@ git diff | atomc plan --format json
   "include_untracked": true,
   "log_diff": false,
   "git_status": "<optional git status>",
-  "model": "deepseek-coder",
+  "model": "qwen2.5-coder:14b",
   "dry_run": true
 }
 ```
@@ -160,7 +160,7 @@ using `diff_mode` and `include_untracked`.
 - Cleanup staging on error (optional flag).
 
 ## Configuration
-- `LOCAL_COMMIT_MODEL`: e.g., `deepseek-coder`
+- `LOCAL_COMMIT_MODEL`: e.g., `qwen2.5-coder:14b`
 - `LOCAL_COMMIT_RUNTIME`: `ollama` | `llama.cpp`
 - `LOCAL_COMMIT_OLLAMA_URL`: base URL for Ollama or llama.cpp (default `http://localhost:11434`)
 - `LOCAL_COMMIT_MAX_TOKENS`, `LOCAL_COMMIT_TEMPERATURE`

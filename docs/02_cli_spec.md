@@ -171,7 +171,7 @@ Defaults apply when a value is not provided via CLI, env, or config.
 
 | Setting | Default | Notes |
 | --- | --- | --- |
-| model | deepseek-coder | LLM model name |
+| model | qwen2.5-coder:14b | LLM model name |
 | runtime | ollama | LLM runtime backend |
 | ollama_url | http://localhost:11434 | LLM base URL (Ollama or llama.cpp) |
 | max_tokens | 2048 | Tokens per request |
@@ -184,6 +184,8 @@ Defaults apply when a value is not provided via CLI, env, or config.
 
 Rationale: a low temperature favors consistent, conservative commit
 planning in the MVP while still allowing minor variation in phrasing.
+Note: The default model is `qwen2.5-coder:14b` while we evaluate which
+local model performs best on structured commit planning.
 
 ### Default Config Location
 - Convention: user-scoped by default, OS-native when possible, and
@@ -208,7 +210,7 @@ planning in the MVP while still allowing minor variation in phrasing.
 ### Config File Format
 Example `config.toml`:
 ```toml
-model = "deepseek-coder"
+model = "qwen2.5-coder:14b"
 runtime = "ollama"
 ollama_url = "http://localhost:11434"
 max_tokens = 2048
