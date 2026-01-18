@@ -13,10 +13,12 @@ commit atomic units safely.
 Applies to `apply` and server-side commit execution.
 
 ## Inputs
+Inputs:
 - `repo_path` (required)
 - `plan` (required)
 - `execute` (bool)
 - `cleanup_on_error` (bool)
+- `assisted_by` (optional): attribution line appended to commit body
 - `input` metadata (optional): diff hash, source, mode, untracked
 
 ## Safety Model

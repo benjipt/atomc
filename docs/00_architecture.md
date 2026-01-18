@@ -133,6 +133,7 @@ Response:
   "diff_mode": "all",
   "include_untracked": true,
   "log_diff": false,
+  "assisted_by": "qwen2.5-coder:14b",
   "plan": [ /* optional; same as above */ ],
   "execute": true
 }

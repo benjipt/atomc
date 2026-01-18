@@ -133,6 +133,7 @@ Options:
 - `--include-untracked` / `--no-include-untracked` (repo diff only)
 - `--format json|human` (default: json)
 - `--model <name>` (overrides config/env)
+- `--assisted-by <name>` (append `Assisted by: <name>` to commit message body)
 - `--cleanup-on-error` (optional; defaults off)
 - `--timeout <seconds>` (overrides config/env)
 
@@ -140,6 +141,7 @@ Behavior:
 - Without `--execute`, the command produces a plan and reports
   intended actions without modifying the repo.
 - With `--execute`, commits are created in plan order.
+- If `--assisted-by` is provided, commit bodies include an attribution line.
 - atomc snapshots the diff and aborts if the worktree changes or the
   staged diff does not match the plan (regardless of diff source).
 
