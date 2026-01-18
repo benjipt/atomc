@@ -38,6 +38,7 @@ pub struct ApplyRequest<'a> {
     pub include_untracked: bool,
     pub expected_diff_hash: Option<String>,
     pub cleanup_on_error: bool,
+    pub assisted_by: Option<&'a str>,
 }
 
 pub fn compute_diff(repo: &Path, mode: DiffMode, include_untracked: bool) -> Result<String, GitError> {
@@ -108,7 +109,7 @@ pub fn apply_plan(request: ApplyRequest<'_>) -> Result<Vec<ApplyResult>, GitErro
         let file_paths: Vec<PathBuf> = unit.files.iter().map(|file| request.repo.join(file)).collect();
         if let Err(error) = stage_files(request.repo, &file_paths)
             .and_then(|_| verify_staged_files(request.repo, unit))
-            .and_then(|_| commit_unit(request.repo, unit))
+            .and_then(|_| commit_unit(request.repo, unit, request.assisted_by))
             .and_then(|hash| {
                 results.push(ApplyResult {
                     id: unit.id.clone(),
@@ -206,13 +207,20 @@ fn list_staged_files(repo: &Path) -> Result<Vec<String>, GitError> {
     Ok(files)
 }
 
-fn commit_unit(repo: &Path, unit: &CommitUnit) -> Result<String, GitError> {
+fn commit_unit(
+    repo: &Path,
+    unit: &CommitUnit,
+    assisted_by: Option<&str>,
+) -> Result<String, GitError> {
     let header = commit_header(unit);
     let cmd_string = format!("git commit -m {}", header);
     let mut cmd = Command::new("git");
     cmd.current_dir(repo).arg("commit").arg("-m").arg(&header);
     for line in &unit.body {
         cmd.arg("-m").arg(line);
+    }
+    if let Some(assisted_by) = assisted_by {
+        cmd.arg("-m").arg(format!("Assisted by: {assisted_by}"));
     }
     let output = cmd.output().map_err(|source| GitError::CommandIo {
         cmd: cmd_string.clone(),

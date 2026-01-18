@@ -72,12 +72,45 @@ fn apply_plan_creates_commit() {
         include_untracked: false,
         expected_diff_hash: Some(diff_hash(&diff)),
         cleanup_on_error: false,
+        assisted_by: None,
     };
 
     let results = apply_plan(request).unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].status, ApplyStatus::Applied);
     assert!(results[0].commit_hash.as_ref().unwrap().len() > 6);
+
+    fs::remove_dir_all(&repo).ok();
+}
+
+#[test]
+fn apply_plan_appends_assisted_by_line() {
+    let repo = setup_repo();
+    let diff = compute_diff(&repo, DiffMode::Worktree, false).unwrap();
+    let plan = sample_plan();
+    let request = ApplyRequest {
+        repo: &repo,
+        plan: &plan,
+        diff: &diff,
+        diff_mode: DiffMode::Worktree,
+        include_untracked: false,
+        expected_diff_hash: Some(diff_hash(&diff)),
+        cleanup_on_error: false,
+        assisted_by: Some("qwen2.5-coder:14b"),
+    };
+
+    let results = apply_plan(request).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status, ApplyStatus::Applied);
+
+    let output = Command::new("git")
+        .current_dir(&repo)
+        .args(["log", "-1", "--pretty=%B"])
+        .output()
+        .expect("git log");
+    assert!(output.status.success());
+    let message = String::from_utf8_lossy(&output.stdout);
+    assert!(message.contains("Assisted by: qwen2.5-coder:14b"));
 
     fs::remove_dir_all(&repo).ok();
 }
@@ -97,6 +130,7 @@ fn apply_plan_rejects_changed_diff() {
         include_untracked: false,
         expected_diff_hash: Some(diff_hash(&diff)),
         cleanup_on_error: false,
+        assisted_by: None,
     };
 
     let error = apply_plan(request).unwrap_err();
@@ -119,6 +153,7 @@ fn apply_plan_rejects_diff_input_mismatch() {
         include_untracked: false,
         expected_diff_hash: Some(diff_hash(diff)),
         cleanup_on_error: false,
+        assisted_by: None,
     };
 
     let error = apply_plan(request).unwrap_err();
@@ -144,6 +179,7 @@ fn apply_plan_cleans_up_on_error() {
         include_untracked: false,
         expected_diff_hash: Some(diff_hash(&diff)),
         cleanup_on_error: true,
+        assisted_by: None,
     };
 
     let error = apply_plan(request).unwrap_err();

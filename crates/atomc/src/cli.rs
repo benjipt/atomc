@@ -94,6 +94,8 @@ pub struct ApplyArgs {
     #[arg(long)]
     pub model: Option<String>,
     #[arg(long)]
+    pub assisted_by: Option<String>,
+    #[arg(long)]
     pub execute: bool,
     #[arg(long)]
     pub cleanup_on_error: bool,

@@ -183,6 +183,7 @@ fn handle_apply(cli: &Cli, args: &ApplyArgs) -> Result<(), ExitCode> {
             include_untracked: config.include_untracked,
             expected_diff_hash: plan.input.as_ref().and_then(|input| input.diff_hash.clone()),
             cleanup_on_error: args.cleanup_on_error,
+            assisted_by: args.assisted_by.as_deref(),
         };
         execute_apply_plan(request).map_err(|err| {
             emit_error(
@@ -264,6 +265,7 @@ struct ApplyRequestBody {
     cleanup_on_error: Option<bool>,
     dry_run: Option<bool>,
     log_diff: Option<bool>,
+    assisted_by: Option<String>,
 }
 
 fn build_app(state: ServerState) -> Router {
@@ -445,6 +447,7 @@ async fn apply_handler(
             include_untracked: config.include_untracked,
             expected_diff_hash: plan.input.as_ref().and_then(|input| input.diff_hash.clone()),
             cleanup_on_error,
+            assisted_by: payload.assisted_by.as_deref(),
         };
         match execute_apply_plan(request) {
             Ok(results) => results,
@@ -1743,6 +1746,7 @@ mod tests {
                 log_diff: false,
                 no_log_diff: false,
                 model: None,
+                assisted_by: None,
                 execute: false,
                 cleanup_on_error: false,
                 timeout: None,
@@ -1779,6 +1783,7 @@ mod tests {
                 log_diff: false,
                 no_log_diff: false,
                 model: None,
+                assisted_by: None,
                 execute: true,
                 cleanup_on_error: true,
                 timeout: None,
