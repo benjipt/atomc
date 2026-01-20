@@ -60,6 +60,8 @@ workflow over agent integration:
 - Stronger quality gates: explicit validation for atomicity and clear
   messaging before any commits are applied.
 
+See `docs/09_mvp_human_first.md` for the current MVP spec draft.
+
 ## Configuration
 Configuration is file-based by default.
 
@@ -77,6 +79,9 @@ LOCAL_COMMIT_OLLAMA_URL=http://localhost:8080
 ```
 
 ## Docs
+Note: `docs/00_` through `docs/08_` are legacy and outdated. Start with
+`docs/09_mvp_human_first.md`.
+
 - `docs/00_architecture.md` — architecture and API contract
 - `docs/01_commit_strategy.md` — atomic commit rules
 - `docs/02_cli_spec.md` — CLI behavior, flags, and defaults
