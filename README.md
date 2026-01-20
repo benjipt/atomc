@@ -9,8 +9,9 @@ It is designed for safe, deterministic local workflows and for easy
 integration with coding agents (Codex, Claude Code, etc.).
 
 ## Status
-Spec-first MVP in progress. See the docs for current behavior and
-contracts; implementation is forthcoming.
+Paused. This repository captures a spec-first MVP attempt and the
+learnings from building and testing it. I plan to revisit the project
+as local LLMs and runtimes improve.
 
 ## Key Concepts
 - JSON-first CLI output for automation.
@@ -29,13 +30,35 @@ Implementation is in progress. Planned installation options:
 - `cargo install` (first release)
 - Prebuilt binaries (later)
 
-## Quickstart (planned)
-```
-atomc plan --repo . --format json
-atomc apply --repo . --dry-run
-atomc apply --repo . --execute
-atomc serve --port 49152
-```
+## Goals and Learnings
+This project started as a spec-first MVP to validate whether a local
+LLM could reliably plan atomic commits from a git diff and optionally
+execute them. It surfaced practical constraints that make the current
+approach a poor user experience without stronger local models and
+faster runtimes:
+
+- Local models struggled to produce consistently atomic commit plans and
+  high-quality commit messages compared to hosted or agent-guided tools.
+- Running the tool required a local LLM server, and the end-to-end
+  latency was higher than expected for interactive use.
+- The JSON-first, agent-friendly output default did not match the
+  intended human workflow for the MVP.
+
+The specs and docs remain as a reference for anyone exploring similar
+local-first commit tooling.
+
+## Future MVP (human-first)
+If/when the project resumes, the MVP will prioritize a simple, human
+workflow over agent integration:
+
+- One primary command that defaults to a dry-run and then asks for
+  confirmation to apply.
+- Human-readable output by default; JSON support only as an opt-in.
+- Minimal setup: a single CLI binary plus a local LLM runtime (no
+  separate atomc server required).
+- Faster feedback: smaller prompts, tighter timeouts, and fewer retries.
+- Stronger quality gates: explicit validation for atomicity and clear
+  messaging before any commits are applied.
 
 ## Configuration
 Configuration is file-based by default.
