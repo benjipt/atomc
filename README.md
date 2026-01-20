@@ -3,10 +3,10 @@
 Local-first atomic commit planner and executor for git diffs.
 
 ## Overview
-atomc accepts a repo path and/or a git diff, uses a local LLM to group
-changes into atomic commits, and can optionally execute those commits.
-It is designed for safe, deterministic local workflows and for easy
-integration with coding agents (Codex, Claude Code, etc.).
+atomc is a local-first commit assistant that plans atomic commits from
+the current working directory and can optionally execute those commits.
+It is designed for safe, deterministic local workflows with a focus on
+human-friendly usage.
 
 ## Status
 Paused. This repository captures a spec-first MVP attempt and the
@@ -14,9 +14,8 @@ learnings from building and testing it. I plan to revisit the project
 as local LLMs and runtimes improve.
 
 ## Key Concepts
-- JSON-first CLI output for automation.
-- Repo-derived diffs by default (mode=all, include_untracked=true).
-- Clear separation between planning and execution.
+- Human-first CLI output for manual use.
+- Repo-derived diffs from the current working directory.
 - Safe apply flow with diff snapshot verification.
 
 ## Requirements (MVP)
