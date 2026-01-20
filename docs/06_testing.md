@@ -1,5 +1,7 @@
 # Testing and Spec Coverage
 
+> Note: This document is outdated. The current MVP spec starts at `docs/09_mvp_human_first.md`.
+
 This document outlines the recommended test strategy for atomc, with a
 focus on correctness, safety, and deterministic behavior.
 

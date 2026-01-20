@@ -1,5 +1,7 @@
 # Commit Strategy Specification
 
+> Note: This document is outdated. The current MVP spec starts at `docs/09_mvp_human_first.md`.
+
 ## Purpose
 Define the canonical rules for creating atomic commits from a diff. This document mirrors the rules in the atomic-commit-agent skill and serves as the policy layer for the local commit service.
 

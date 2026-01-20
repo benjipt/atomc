@@ -1,5 +1,7 @@
 # Local Atomic Commit Service - Architecture / Tech Spec
 
+> Note: This document is outdated. The current MVP spec starts at `docs/09_mvp_human_first.md`.
+
 ## Summary
 Build a local-first service in Rust that accepts a repo path and/or a git diff, computes the diff locally when needed, produces an atomic commit plan via a local LLM (DeepSeek Coder by default), and optionally executes `git add` / `git commit` for each atomic unit. The service supports a CLI by default and an optional localhost HTTP server for repeated calls.
 

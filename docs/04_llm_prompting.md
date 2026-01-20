@@ -1,5 +1,7 @@
 # LLM Prompting Specification
 
+> Note: This document is outdated. The current MVP spec starts at `docs/09_mvp_human_first.md`.
+
 This document defines the prompt contract used to produce atomic commit
 plans from a diff. It is designed for local LLMs (Ollama by default, with
 llama.cpp optional) and prioritizes determinism, safety, and strict JSON

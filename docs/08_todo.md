@@ -1,5 +1,7 @@
 # TODOs
 
+> Note: This document is outdated. The current MVP spec starts at `docs/09_mvp_human_first.md`.
+
 ## Plan Quality Improvements
 - Enforce file paths in `files[]` must appear in the diff file list; reject and
   retry on violations.

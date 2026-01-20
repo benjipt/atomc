@@ -1,5 +1,7 @@
 # Assumptions and Learnings
 
+> Note: This document is outdated. The current MVP spec starts at `docs/09_mvp_human_first.md`.
+
 This document tracks assumptions discovered during implementation and testing,
 the evidence that disproved or confirmed them, and the resulting resolution.
 

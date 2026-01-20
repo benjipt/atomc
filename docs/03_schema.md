@@ -1,5 +1,7 @@
 # Schema Specification
 
+> Note: This document is outdated. The current MVP spec starts at `docs/09_mvp_human_first.md`.
+
 This document defines the JSON contracts returned by `atomc` and the
 HTTP server. It is the canonical reference for agent integrations.
 

@@ -1,5 +1,7 @@
 # CLI Specification
 
+> Note: This document is outdated. The current MVP spec starts at `docs/09_mvp_human_first.md`.
+
 ## Goals
 - Provide a stable, agent-friendly CLI with JSON-first output.
 - Keep MVP scope simple while preserving a path for future expansion.
